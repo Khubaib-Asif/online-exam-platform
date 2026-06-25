@@ -1,3 +1,4 @@
+
 name: Security Scan Pipeline
 
 on:
@@ -6,10 +7,14 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions: read-all
+
 jobs:
   security_pipeline:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Placeholder for security scanner
-        run: echo "Security scanning tools will execute here as project scales"
+        run: echo "Security scanning tools will execute here "
+
+
