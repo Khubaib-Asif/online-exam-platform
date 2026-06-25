@@ -1,0 +1,17 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  ci.yml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder for linting
+        run: echo "Linting will be added when code exists"
+      - name: Placeholder for security scan
+        run: echo "Security scan will be added when dependencies exist"
