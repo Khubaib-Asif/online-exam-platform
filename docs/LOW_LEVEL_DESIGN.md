@@ -1051,7 +1051,7 @@ const EnvSchema = z.object({
 function loadEnv() {
   const result = EnvSchema.safeParse(process.env);
   if (!result.success) {
-    console.error('❌ Invalid environment configuration:');
+    console.error(' Invalid environment configuration:');
     console.error(result.error.format());
     process.exit(1);
   }
@@ -5594,53 +5594,53 @@ CMD ["node", "packages/backend/dist/index.js"]
 
 set -euo pipefail
 
-echo "🔧 Online Exam Platform — Dev Setup"
+echo " Online Exam Platform — Dev Setup"
 
 # ── 1. Check prerequisites ───────────────────────────────────────
-command -v node >/dev/null 2>&1 || { echo "❌ Node.js 20+ required"; exit 1; }
-command -v docker >/dev/null 2>&1 || { echo "❌ Docker required"; exit 1; }
+command -v node >/dev/null 2>&1 || { echo " Node.js 20+ required"; exit 1; }
+command -v docker >/dev/null 2>&1 || { echo " Docker required"; exit 1; }
 NODE_VER=$(node -e "process.stdout.write(process.versions.node.split('.')[0])")
-[[ "$NODE_VER" -ge 20 ]] || { echo "❌ Node.js 20+ required (found $NODE_VER)"; exit 1; }
+[[ "$NODE_VER" -ge 20 ]] || { echo " Node.js 20+ required (found $NODE_VER)"; exit 1; }
 
 # ── 2. Install dependencies ──────────────────────────────────────
-echo "📦 Installing dependencies..."
+echo " Installing dependencies..."
 npm ci
 
 # ── 3. Copy env file if not present ─────────────────────────────
 if [ ! -f .env ]; then
   cp .env.example .env
-  echo "⚠️  .env created from .env.example — fill in your values"
+  echo "  .env created from .env.example — fill in your values"
 fi
 
 # ── 4. Start infrastructure containers ──────────────────────────
-echo "🐳 Starting PostgreSQL and Redis..."
+echo " Starting PostgreSQL and Redis..."
 docker compose -f infra/docker/docker-compose.yml up -d postgres redis
-echo "⏳ Waiting for databases to be ready..."
+echo " Waiting for databases to be ready..."
 sleep 5
 
 # ── 5. Run database migrations ───────────────────────────────────
-echo "🗃️  Running database migrations..."
+echo "  Running database migrations..."
 npm run db:migrate --workspace=packages/backend
 
 # ── 6. Generate RSA keys for JWT ────────────────────────────────
 if [ ! -f keys/private.pem ]; then
-  echo "🔑 Generating JWT RSA key pair..."
+  echo " Generating JWT RSA key pair..."
   mkdir -p keys
   openssl genrsa -out keys/private.pem 2048
   openssl rsa    -in keys/private.pem -pubout -out keys/public.pem
-  echo "✅ Keys generated in ./keys/ — keep private.pem secret, never commit"
+  echo " Keys generated in ./keys/ — keep private.pem secret, never commit"
 fi
 
 # ── 7. Seed development database ────────────────────────────────
-echo "🌱 Seeding database..."
+echo " Seeding database..."
 npm run db:seed --workspace=packages/backend
 
 # ── 8. Git hooks ─────────────────────────────────────────────────
-echo "🪝 Setting up Git hooks..."
+echo " Setting up Git hooks..."
 npx husky install
 
 echo ""
-echo "✅ Setup complete. Start the stack:"
+echo " Setup complete. Start the stack:"
 echo "   npm run dev:backend"
 echo "   npm run dev:web"
 echo "   npm run dev:electron"
@@ -5989,7 +5989,7 @@ import { db } from '../src/db/client.js';
 import { passwordService } from '../src/modules/auth/password.service.js';
 
 async function seed() {
-  console.log('🌱 Seeding database...');
+  console.log(' Seeding database...');
 
   // ── Institution ──────────────────────────────────────────────
   const institution = await db.institution.upsert({
@@ -6041,7 +6041,7 @@ async function seed() {
   });
   console.log(`  Class: ${cls.name} (${cls.id})`);
 
-  console.log('\n✅ Seed complete');
+  console.log('\n Seed complete');
   console.log('\nDemo credentials (password: DemoPassword1!):');
   for (const u of users) console.log(`  ${u.role.padEnd(20)} ${u.email}`);
 }
