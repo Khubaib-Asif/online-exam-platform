@@ -357,6 +357,12 @@ export const CreateExamSchema = z.object({
   endTime:        z.string().datetime(),
   duration:       z.number().int().min(5).max(480),  // minutes
   proctoringTier: z.enum(['POST_HOC_REVIEW', 'LIVE_AI_ESCALATION', 'FULL_LIVE_HUMAN']),
+  
+  autoSubmitRiskThreshold: z.number().int().min(20).max(100).optional(),
+  
+  maxSilentReconnects: z.number().int().min(1).max(7).optional(),
+  
+  reconnectPenaltyBase: z.number().int().min(10).max(20).optional(),
   settings: z.object({
     shuffleQuestions:    z.boolean().default(false),
     shuffleOptions:      z.boolean().default(false),
@@ -366,7 +372,18 @@ export const CreateExamSchema = z.object({
     passMarkPercent:     z.number().min(0).max(100).optional(),
     requireLockdown:     z.boolean().default(true),
   }),
-});
+}).refine(
+  (data) => {
+    const threshold = data.autoSubmitRiskThreshold ?? 90;
+    const penalty    = data.reconnectPenaltyBase ?? 10;
+    
+    return threshold > penalty;
+  },
+  {
+    message: 'autoSubmitRiskThreshold must be greater than reconnectPenaltyBase, otherwise a single silent reconnect can trigger auto-submit.',
+    path: ['autoSubmitRiskThreshold'],
+  },
+);
 
 export const CreateQuestionSchema = z.object({
   bankId:     z.string().uuid(),
@@ -439,6 +456,8 @@ export const ErrorCode = {
   SESSION_ALREADY_ACTIVE:    'E5005',
   EXAM_NOT_STARTED:          'E5006',
   EXAM_ENDED:                'E5007',
+  GRADE_ALREADY_PUBLISHED:   'E5008',
+  SESSION_RECONNECT_LIMIT_EXCEEDED: 'E5009',
   // Security gates (6xxx)
   FACE_VERIFICATION_FAILED:  'E6001',
   DEVICE_NOT_REGISTERED:     'E6002',
@@ -690,6 +709,7 @@ model Exam {
   endTime         DateTime
   durationSeconds Int
   settings        Json        @default("{}")
+  
   classId         String
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
@@ -1024,6 +1044,9 @@ const EnvSchema = z.object({
   QUESTION_ENC_KEY:       z.string().length(64),   // 32 bytes hex
   ANSWER_ENC_KEY:         z.string().length(64),
   BIOMETRIC_ENC_KEY:      z.string().length(64),
+
+  // Entry token signing 
+  ENTRY_TOKEN_HMAC_SECRET: z.string().length(64),   // 32 bytes hex
 
   // Object storage
   S3_ENDPOINT:            z.string().url(),
@@ -1437,10 +1460,11 @@ export function errorHandler(
   _next: NextFunction,
 ): void {
   if (err instanceof AppError) {
-    // Operational errors — expected, safe to expose message
+    // Operational errors — expected, safe to expose message. 
     res.status(err.statusCode).json({
-      error:  err.message,
-      code:   err.code,
+      error:   err.message,
+      code:    err.code,
+      ...(err.details !== undefined ? { details: err.details } : {}),
     });
     return;
   }
@@ -2482,8 +2506,10 @@ export const questionService = new QuestionService();
 ```typescript
 // packages/backend/src/modules/sessions/session.service.ts
 import crypto from 'crypto';
+import type { Server } from 'socket.io';
 import { db } from '../../db/client.js';
 import { redis } from '../../config/redis.js';
+import { env } from '../../config/env.js';
 import { AppError } from '../../utils/errors.js';
 import { ErrorCode, SessionStatus } from 'shared';
 import { examHashService } from '../exams/exam-hash.service.js';
@@ -2497,6 +2523,10 @@ const KEYS = {
   activeSession: (sessionId: string)  => `session:active:${sessionId}`,
   sessionTimer:  (sessionId: string)  => `session:timer:${sessionId}`,
   pairingToken:  (token: string)      => `pairing:${token}`,
+  
+  resumeToken:   (sessionId: string)  => `resume_token:${sessionId}`,
+  
+  reconnectCount: (sessionId: string) => `session:reconnect_count:${sessionId}`,
 } as const;
 
 export class SessionService {
@@ -2538,8 +2568,9 @@ export class SessionService {
       ip, nonce, contentHash: exam.contentHash,
       exp: Date.now() + 5 * 60_000,  // 5 minutes
     });
+    // sign with the stable server secret
     const signature = crypto
-      .createHmac('sha256', crypto.randomBytes(32))
+      .createHmac('sha256', Buffer.from(env.ENTRY_TOKEN_HMAC_SECRET, 'hex'))
       .update(payload)
       .digest('hex');
     const token = `${Buffer.from(payload).toString('base64url')}.${signature}`;
@@ -2575,14 +2606,30 @@ export class SessionService {
     deviceId: string,
   ) {
     // Decode and extract nonce
-    const [b64Payload] = rawEntryToken.split('.');
-    const payload = JSON.parse(Buffer.from(b64Payload!, 'base64url').toString());
+    const [b64Payload, signature] = rawEntryToken.split('.');
+    if (!b64Payload || !signature) {
+      throw new AppError(401, 'Malformed entry token', ErrorCode.TOKEN_INVALID);
+    }
+    const rawPayloadStr = Buffer.from(b64Payload, 'base64url').toString();
+    const payload = JSON.parse(rawPayloadStr);
+
+    // verify the HMAC signature against the stable server secret.
+    const expectedSignature = crypto
+      .createHmac('sha256', Buffer.from(env.ENTRY_TOKEN_HMAC_SECRET, 'hex'))
+      .update(rawPayloadStr)
+      .digest('hex');
+    const signatureValid =
+      expectedSignature.length === signature.length &&
+      crypto.timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(signature));
+    if (!signatureValid) {
+      throw new AppError(401, 'Entry token signature invalid', ErrorCode.TOKEN_INVALID);
+    }
 
     if (Date.now() > payload.exp) {
       throw new AppError(401, 'Entry token expired', ErrorCode.ENTRY_TOKEN_EXPIRED);
     }
 
-    // Check nonce exists and retrieve stored data (single-use: delete atomically)
+    // Single-use nonce redemption
     const stored = await redis.getDel(KEYS.entryToken(payload.nonce));
     if (!stored) {
       throw new AppError(401, 'Entry token already used or invalid', ErrorCode.ENTRY_TOKEN_ALREADY_USED);
@@ -2619,6 +2666,9 @@ export class SessionService {
     );
     await redis.set(KEYS.sessionTimer(session.id), endTime.toString(), 'EXAT', Math.ceil(endTime / 1000));
 
+    // Resume token for reconnects
+    await this.reissueResumeToken(session.id, payload.deviceFingerprintHash);
+
     // Transition exam to ACTIVE if not already
     if (exam.status === 'PUBLISHED') {
       await db.exam.update({ where: { id: exam.id }, data: { status: 'ACTIVE' } });
@@ -2647,12 +2697,21 @@ export class SessionService {
     const session = await this.requireActiveSession(sessionId, studentId);
     await this.verifyNotExpired(session.id);
 
+    // Question must belong to current exam — prevents cross-exam answer injection.
+    const examQuestion = await db.examQuestion.findFirst({
+      where: { questionId, section: { examId: session.examId } },
+      select: { sectionId: true },
+    });
+    if (!examQuestion) {
+      throw new AppError(403, 'Question does not belong to this exam session', ErrorCode.FORBIDDEN);
+    }
+
     // Encrypt response before storage
     const encryptedResponse = cryptoService.encryptAnswer(JSON.stringify(response));
 
     await db.studentAnswer.upsert({
       where:  { sessionId_questionId: { sessionId, questionId } },
-      create: { sessionId, questionId, sectionId: '', encryptedResponse, timeSpentMs, answeredAt: new Date() },
+      create: { sessionId, questionId, sectionId: examQuestion.sectionId, encryptedResponse, timeSpentMs, answeredAt: new Date() },
       update: { encryptedResponse, timeSpentMs, updatedAt: new Date() },
     });
   }
@@ -2690,6 +2749,87 @@ export class SessionService {
 
     const { gradingQueue } = await import('../../jobs/queues.js');
     await gradingQueue.add('grade-session', { sessionId });
+  }
+
+  // JOIN = entry token + gates. RESUME = reattach PAUSED (no gates).
+// Resume tokens reissued on each reconnect.
+  async reissueResumeToken(sessionId: string, deviceFingerprintHash: string): Promise<string> {
+    const token = crypto.randomBytes(24).toString('hex');
+    await redis.set(
+      KEYS.resumeToken(sessionId),
+      JSON.stringify({ token, sessionId, deviceFingerprintHash }),
+      'EX', 7200, // matches the 2h active-session TTL
+    );
+    return token;
+  }
+
+  async validateResumeToken(
+    sessionId: string,
+    studentId: string,
+    resumeToken: string,
+    deviceFingerprintHash: string,
+    io: Server,
+  ) {
+    const stored = await redis.get(KEYS.resumeToken(sessionId));
+    if (!stored) {
+      throw new AppError(401, 'Resume token expired or session not resumable', ErrorCode.TOKEN_INVALID);
+    }
+    const storedData = JSON.parse(stored);
+    if (storedData.token !== resumeToken || storedData.deviceFingerprintHash !== deviceFingerprintHash) {
+      throw new AppError(401, 'Resume token or device mismatch', ErrorCode.TOKEN_INVALID);
+    }
+
+    const session = await db.examSession.findFirst({
+      where: { id: sessionId, studentId, status: 'PAUSED' },
+    });
+    if (!session) {
+      throw new AppError(404, 'No paused session to resume', ErrorCode.NOT_FOUND);
+    }
+
+    // Atomic reconnect count. TTL matches resume-token lifetime
+    const reconnectCount = await redis.incr(KEYS.reconnectCount(sessionId));
+    await redis.expire(KEYS.reconnectCount(sessionId), 7200);
+
+    const { proctoringService } = await import('../proctoring/proctoring.service.js');
+    const { limitExceeded } = await proctoringService.recordReconnect(
+      sessionId, session.examId, reconnectCount, io,
+    );
+
+    // Cap exceeded: proctor notified, student stays PAUSED.
+    if (limitExceeded) {
+      io.of('/proctor').to(`exam:${session.examId}`).emit('session:reconnect-limit-exceeded', {
+        sessionId, studentId, reconnectCount,
+      });
+      throw new AppError(
+        403,
+        'Reconnect limit exceeded for this session — proctor approval is required to resume.',
+        ErrorCode.SESSION_RECONNECT_LIMIT_EXCEEDED,
+        { sessionId, reconnectCount },
+      );
+    }
+
+    // Cancel the pending auto-submit job as jobId is the sessionId.
+    const { autoSubmitQueue } = await import('../../jobs/queues.js');
+    const pendingJob = await autoSubmitQueue.getJob(sessionId);
+    await pendingJob?.remove();
+
+    const resumed = await db.examSession.update({
+      where: { id: sessionId },
+      data:  { status: 'ACTIVE' },
+    });
+
+    // Reissue the resume token for the *next* potential drop.
+    await this.reissueResumeToken(sessionId, deviceFingerprintHash);
+
+    await auditService.log({
+      actorId:      studentId,
+      action:       'SESSION_RESUMED',
+      resourceType: 'ExamSession',
+      resourceId:   sessionId,
+      metadata:     { reconnectCount },
+    });
+
+    return resumed;
   }
 
   // ── Pairing token for mobile secondary camera ─────────────────
@@ -2948,6 +3088,8 @@ import { logger } from '../../utils/logger.js';
 // ── Inbound events (client → server) ─────────────────────────
 const CLIENT_EVENTS = {
   JOIN:              'session:join',
+   // RESUME: reattach PAUSED session via resume token.
+  RESUME:            'session:resume',
   SUBMIT_ANSWER:     'answer:submit',
   SUBMIT_EXAM:       'exam:submit',
   HEARTBEAT:         'heartbeat',
@@ -3015,6 +3157,39 @@ export const examNamespace = {
       }
     });
 
+    // RESUME: reattach PAUSED session. Validates token, cancels auto-submit, no gate re-run.
+    socket.on(CLIENT_EVENTS.RESUME, async (payload: {
+      sessionId: string; resumeToken: string; deviceFingerprintHash: string;
+    }) => {
+      try {
+        const session = await sessionService.validateResumeToken(
+          payload.sessionId, user.sub, payload.resumeToken, payload.deviceFingerprintHash, io,
+        );
+
+        const activeSocketKey = `ws:session:${session.id}`;
+        const existingSocketId = await redis.get(activeSocketKey);
+        if (existingSocketId && existingSocketId !== socket.id) {
+          const prevSocket = io.of(socket.nsp.name).sockets.get(existingSocketId);
+          prevSocket?.disconnect(true);
+        }
+        await redis.set(activeSocketKey, socket.id, 'EX', 7200);
+
+        socket.join(`session:${session.id}`);
+        socket.data['sessionId'] = session.id;
+
+        socket.emit(SERVER_EVENTS.SESSION_STATE, {
+          sessionId: session.id,
+          examId,
+          status:    'ACTIVE',
+          serverTime: Date.now(),
+        });
+
+        this.startTimerSync(socket, session.id);
+      } catch (err: any) {
+        socket.emit(SERVER_EVENTS.ERROR, { code: err.code, message: err.message });
+      }
+    });
+
     // ── ANSWER SUBMISSION ─────────────────────────────────────
     socket.on(CLIENT_EVENTS.SUBMIT_ANSWER, async (payload) => {
       const sessionId = socket.data['sessionId'];
@@ -3072,27 +3247,24 @@ export const examNamespace = {
       logger.info({ sessionId, reason }, 'WS disconnect');
 
       if (sessionId) {
-        // Transition to PAUSED — give 60s reconnect window
+        // Transition to PAUSED — give a bounded reconnect window
         const { db } = await import('../../db/client.js');
         await db.examSession.updateMany({
           where: { id: sessionId, status: 'ACTIVE' },
           data:  { status: 'PAUSED' },
         });
 
-        // Schedule auto-submit if no reconnect within 60s
-        setTimeout(async () => {
-          const session = await db.examSession.findFirst({
-            where: { id: sessionId, status: 'PAUSED' },
-          });
-          if (session) {
-            logger.warn({ sessionId }, 'Reconnect window expired — auto-submitting');
-            await sessionService.autoSubmit(sessionId);
-            // Emit to proctor namespace
-            io.of('/proctor').to(`exam:${examId}`).emit('session:disconnected', {
-              sessionId, studentId: user.sub, reason: 'RECONNECT_TIMEOUT',
-            });
-          }
-        }, 60_000);
+        // Redis-backed delayed job: idempotent via jobId = sessionId.
+        const { autoSubmitQueue } = await import('../../jobs/queues.js');
+        await autoSubmitQueue.add(
+          'reconnect-timeout',
+          { sessionId },
+          { jobId: sessionId, delay: 60_000 },
+        );
+
+        io.of('/proctor').to(`exam:${examId}`).emit('session:disconnected', {
+          sessionId, studentId: user.sub, reason: 'CONNECTION_DROPPED',
+        });
       }
     });
   },
@@ -3148,6 +3320,7 @@ const EVENT_RISK_WEIGHTS: Record<string, number> = {
   CONTEXT_MENU:       3,
   WINDOW_RESIZE:      4,
   RIGHT_CLICK:        2,
+  
 };
 
 // Consecutive frame thresholds before flagging
@@ -3246,16 +3419,48 @@ export class ProctoringService {
       });
     }
 
-    // Check if risk score crossed auto-submit threshold (score >= 90)
+    // Single query: riskScore + teacher-configured threshold (non-nullable, @default 90).
+    await this.checkAutoSubmitThreshold(sessionId, examId, io);
+  }
+
+  private async checkAutoSubmitThreshold(sessionId: string, examId: string, io: Server) {
     const session = await db.examSession.findUnique({
-      where: { id: sessionId }, select: { riskScore: true },
+      where:  { id: sessionId },
+      select: { riskScore: true, exam: { select: { autoSubmitRiskThreshold: true } } },
     });
-    if (session && session.riskScore >= 90) {
+    if (session && session.riskScore >= session.exam.autoSubmitRiskThreshold) {
       const { sessionService } = await import('../sessions/session.service.js');
       await sessionService.autoSubmit(sessionId);
       io.of(`/exam/${examId}`).to(`session:${sessionId}`)
         .emit('exam:auto-submitted', { reason: 'RISK_THRESHOLD_EXCEEDED' });
     }
+  }
+
+  // Teacher-configurable flat risk cost per reconnect. Cap stops repetition.
+  async recordReconnect(
+    sessionId: string, examId: string, reconnectCount: number, io: Server,
+  ): Promise<{ limitExceeded: boolean }> {
+    const exam = await db.exam.findUniqueOrThrow({
+      where:  { id: examId },
+      select: { reconnectPenaltyBase: true, maxSilentReconnects: true },
+    });
+
+    const delta = exam.reconnectPenaltyBase;
+
+    await db.telemetryEvent.create({
+      data: {
+        sessionId,
+        eventType: 'SESSION_RECONNECT',
+        timestamp: new Date(),
+        metadata:  { reconnectCount, penaltyBase: exam.reconnectPenaltyBase },
+        riskDelta: delta,
+      },
+    });
+
+    await this.updateRiskScore(sessionId, delta);
+    await this.checkAutoSubmitThreshold(sessionId, examId, io);
+
+    return { limitExceeded: reconnectCount > exam.maxSilentReconnects };
   }
 
   async reviewFlag(
@@ -3286,20 +3491,23 @@ export class ProctoringService {
     return flag;
   }
 
+  // Atomic DB increment — prevents read-modify-write race between concurrent updates.
   private async updateRiskScore(sessionId: string, delta: number) {
     await db.examSession.update({
       where: { id: sessionId },
-      data:  {
-        riskScore: {
-          // Clamp to 0-100
-          set: Math.min(100, Math.max(0,
-            (await db.examSession.findUniqueOrThrow({
-              where: { id: sessionId }, select: { riskScore: true },
-            })).riskScore + delta,
-          )),
-        },
-      },
+      data:  { riskScore: { increment: delta } },
     });
+
+    // Idempotent clamp: only pulls back to [0, 100]
+    const current = await db.examSession.findUniqueOrThrow({
+      where: { id: sessionId }, select: { riskScore: true },
+    });
+    if (current.riskScore > 100 || current.riskScore < 0) {
+      await db.examSession.update({
+        where: { id: sessionId },
+        data:  { riskScore: Math.min(100, Math.max(0, current.riskScore)) },
+      });
+    }
   }
 }
 
@@ -3428,11 +3636,33 @@ export class GradingService {
       include: { question: true },
     });
 
+    
     if (score < 0 || score > grade.maxScore) {
       throw new AppError(400, `Score must be between 0 and ${grade.maxScore}`, ErrorCode.VALIDATION_ERROR);
     }
 
-    // Write immutable history record before updating
+    // Atomic update guard: only apply if grade is still unpublished.
+    const updateResult = await db.grade.updateMany({
+      where: { sessionId, questionId, isPublished: false },
+      data:  {
+        score,
+        gradedBy:    teacherId,
+        confirmedBy: teacherId,
+        confirmedAt: new Date(),
+        teacherNote: note,
+      },
+    });
+
+    if (updateResult.count === 0) {
+      
+      throw new AppError(
+        409,
+        'Grade is already published and cannot be edited directly. Reopen grading for this session first.',
+        ErrorCode.GRADE_ALREADY_PUBLISHED,
+        { sessionId, questionId, reopenAction: 'reopenGrading' },
+      );
+    }
+
     await db.gradeHistory.create({
       data: {
         sessionId,
@@ -3443,15 +3673,8 @@ export class GradingService {
       },
     });
 
-    const updated = await db.grade.update({
+    const updated = await db.grade.findUniqueOrThrow({
       where: { sessionId_questionId: { sessionId, questionId } },
-      data:  {
-        score,
-        gradedBy:    teacherId,
-        confirmedBy: teacherId,
-        confirmedAt: new Date(),
-        teacherNote: note,
-      },
     });
 
     await auditService.log({
@@ -3545,6 +3768,46 @@ export const gradingQueue    = new Queue('grading',    { connection });
 export const telemetryQueue  = new Queue('telemetry',  { connection });
 export const sanitizeQueue   = new Queue('sanitize',   { connection });
 export const reportQueue     = new Queue('reports',    { connection });
+
+// Redis-backed delayed job replacing the old in-process
+// setTimeout for reconnect-window auto-submit. 
+export const autoSubmitQueue = new Queue('auto-submit', { connection });
+```
+
+### 16.1a Auto-Submit (Reconnect Timeout) Worker
+
+```typescript
+// packages/backend/src/jobs/workers/auto-submit.worker.ts
+import { Worker } from 'bullmq';
+import { sessionService } from '../../modules/sessions/session.service.js';
+import { logger } from '../../utils/logger.js';
+
+// jobId is always the sessionId, so scheduling is idempotent: re-adding a
+// job with the same id after a fresh disconnect simply replaces the
+// existing delayed job rather than stacking a second one.
+export const autoSubmitWorker = new Worker('auto-submit', async (job) => {
+  const { sessionId } = job.data as { sessionId: string };
+  logger.warn({ sessionId }, 'Reconnect window expired — auto-submitting');
+  await sessionService.autoSubmit(sessionId);
+
+  // Worker processes don't hold a live Socket.IO server reference, so we
+  // publish over Redis pub/sub; the WS gateway process(es) subscribe to
+  // this channel and re-broadcast to the relevant proctor room. 
+  const { redis } = await import('../../config/redis.js');
+  await redis.publish('proctor:session-auto-submitted', JSON.stringify({
+    sessionId, reason: 'RECONNECT_TIMEOUT',
+  }));
+
+  return { sessionId, submittedAt: new Date().toISOString() };
+}, {
+  concurrency: 10,
+  removeOnComplete: { count: 100 },
+  removeOnFail:     { count: 50 },
+});
+
+autoSubmitWorker.on('failed', (job, err) => {
+  logger.error({ jobId: job?.id, err }, 'Auto-submit job failed');
+});
 ```
 
 ### 16.2 Grading Worker
@@ -5008,15 +5271,23 @@ risk_score += sum(EVENT_RISK_WEIGHTS[event] for event in telemetry_batch)
 risk_score += 12 per AI flag raised (FACE_MISSING, GAZE_OFF_SCREEN, etc.)
 risk_score = min(100, risk_score)
 
-Thresholds:
+Alert tiers (proctor-dashboard severity, do not affect auto-submit):
   0  – 30:  Normal          → no proctor alert
   31 – 60:  Low risk        → flagged for post-hoc review
   61 – 85:  Medium risk     → real-time alert pushed to proctor dashboard
   86 – 99:  High risk       → proctor receives urgent alert
-  100:       Hard violation  → session auto-submitted immediately
+
+Auto-submit: triggered separately, when risk_score crosses the
+per-exam Exam.autoSubmitRiskThreshold column (teacher-configurable,
+@default 90) — see processAnalysisResult. 
+ceiling (risk_score is clamped to max 100 above).
 ```
 
-The threshold config values are stored per-exam in `exam.settings.riskThresholds` so teachers can tune sensitivity for different exam types. The defaults above are the system defaults applied when no override exists.
+Alert-tier bands (30/60/85) are fixed system constants, not per-exam
+config — every exam's proctor dashboard uses the same severity coloring.
+The auto-submit threshold is the only value a teacher can override, via
+`Exam.autoSubmitRiskThreshold` (a real Prisma column — see Section 4 Exam
+model ).
 
 ---
 
@@ -6261,7 +6532,4 @@ online-exam-platform/
 
 *This Low Level Design document is complete. All 35 sections cover every component of the system from shared types through to deployment infrastructure. Implementation should follow the patterns specified here and any deviation must be updated in this document via a reviewed PR.*
 
-*Last updated: 2026-06-30*
-
-
-
+*Last updated: 2026-07-10*
