@@ -329,11 +329,12 @@ export const GradedBy = {
 import { z } from 'zod';
 
 export const LoginSchema = z.object({
+  institutionSlug: z.string().min(1).max(128).trim().toLowerCase(),
   email:    z.string().email().max(254).toLowerCase(),
   password: z.string().min(8).max(128),
 });
 
-export const RegisterSchema = z.object({
+const RegisterBaseSchema = z.object({
   institutionId: z.string().uuid(),
   email:         z.string().email().max(254).toLowerCase(),
   password:      z.string()
@@ -345,7 +346,25 @@ export const RegisterSchema = z.object({
     .regex(/[^A-Za-z0-9]/, 'Must contain a special character'),
   firstName:     z.string().min(1).max(64).trim(),
   lastName:      z.string().min(1).max(64).trim(),
-  role:          z.enum(['TEACHER', 'STUDENT', 'PROCTOR', 'APPROVER']),
+});
+
+// Public self-registration (no auth). Role is fixed to STUDENT server-side —
+// never accepted from the client — so this endpoint cannot mint privileged
+// accounts. institutionId is still client-supplied (a student self-enrolls
+// into a known institution); that alone is not a privilege-escalation vector.
+export const PublicRegisterSchema = RegisterBaseSchema;
+
+// Admin-invoked staff registration. institutionId is deliberately NOT part
+// of this schema — the controller derives it from the caller's own JWT, so
+// an authenticated admin can only ever create accounts inside their own
+// institution, never an arbitrary one.
+export const StaffRegisterSchema = RegisterBaseSchema.omit({ institutionId: true }).extend({
+  role: z.enum(['TEACHER', 'STUDENT', 'PROCTOR', 'APPROVER']),
+});
+
+// One-time token issued via email, redeemed once against Redis (SEC-4).
+export const VerifyEmailSchema = z.object({
+  token: z.string().min(1),
 });
 
 // packages/shared/src/validators/exam.schemas.ts
@@ -426,6 +445,30 @@ export const TelemetryBatchSchema = z.object({
     metadata:  z.record(z.unknown()).optional(),
   })).max(500),
 });
+
+export const ResumeSchema = z.object({
+  sessionId:             z.string().uuid(),
+  resumeToken:           z.string().min(1),
+  deviceFingerprintHash: z.string().min(1),
+});
+
+export const AnalysisResultSchema = z.object({
+  faceDetected:   z.boolean(),
+  multipleFaces:  z.boolean(),
+  gazeOffScreen:  z.boolean(),
+  secondaryVoice: z.boolean().optional(),
+  confidence:     z.number().min(0).max(1),
+});
+```
+
+```typescript
+// packages/shared/src/validators/common.schemas.ts
+import { z } from 'zod';
+
+export const PaginationSchema = z.object({
+  page:  z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
 ```
 
 ### 3.4 Shared Error Codes
@@ -441,6 +484,7 @@ export const ErrorCode = {
   TOKEN_INVALID:             'E1004',
   TOKEN_REUSE_DETECTED:      'E1005',
   REFRESH_TOKEN_MISSING:     'E1006',
+  EMAIL_NOT_VERIFIED:        'E1007',
   // Authorization (2xxx)
   FORBIDDEN:                 'E2001',
   // Validation (3xxx)
@@ -709,6 +753,12 @@ model Exam {
   endTime         DateTime
   durationSeconds Int
   settings        Json        @default("{}")
+
+  // Teacher-configurable auto-submit / reconnect-abuse thresholds (DB-1).
+  // Defaults match the values assumed throughout the proctoring/reconnect logic.
+  autoSubmitRiskThreshold Int  @default(90)
+  maxSilentReconnects     Int  @default(3)
+  reconnectPenaltyBase    Int  @default(10)
   
   classId         String
   createdAt       DateTime    @default(now())
@@ -806,6 +856,10 @@ model ExamSession {
   entryTokenExpiry   DateTime?
   // Content hash at time of session start — must match exam.contentHash
   contentHashAtStart String?       @db.VarChar(128)
+  // Deterministic per-session shuffle seed (DB-3) — set once at session
+  // start, reused for all option-shuffling so a resumed student always
+  // sees the same order.
+  shuffleSeed        String?       @db.VarChar(64)
   ipAtStart          String?       @db.VarChar(45)
   startedAt          DateTime?
   submittedAt        DateTime?
@@ -975,7 +1029,9 @@ model AuditLog {
   action          String    @db.VarChar(128)   // e.g. "EXAM_PUBLISHED"
   resourceType    String    @db.VarChar(64)    // e.g. "Exam"
   resourceId      String?   @db.VarChar(64)
-  // sanitized metadata — PII-masked for non-admin viewers
+  // raw metadata as captured at write time — part of the hash chain, must
+  // never be mutated after creation (SEC-7). PII masking for non-admin
+  // viewers happens at read time, see AuditService.getMetadataForViewer.
   metadata        Json      @default("{}")
   ipAddress       String?   @db.VarChar(45)
   userAgent       String?   @db.VarChar(512)
@@ -1059,6 +1115,7 @@ const EnvSchema = z.object({
   // External services
   IP_INTEL_API_KEY:       z.string().min(1),
   IP_INTEL_BASE_URL:      z.string().url(),
+  IP_INTEL_FAIL_OPEN:     z.coerce.boolean().default(true),  // API-4: explicit fail-open config
   SENDGRID_API_KEY:       z.string().min(1),
   SENDGRID_FROM_EMAIL:    z.string().email(),
   AI_SERVICE_URL:         z.string().url(),
@@ -1161,6 +1218,11 @@ import { router } from './router.js';
 
 export function createApp() {
   const app = express();
+
+  // Exactly one trusted hop: the gateway/LB (HLD §6/§17 — single network
+  // entry point). req.ip becomes the left-most X-Forwarded-For entry set
+  // by that hop, instead of the LB's own socket address (API-3).
+  app.set('trust proxy', 1);
 
   // ── Security headers ─────────────────────────────
   app.use(helmet({
@@ -1267,7 +1329,7 @@ export async function authenticate(
       res.status(401).json({ error: 'Token expired', code: ErrorCode.TOKEN_EXPIRED });
     } else {
       // Log suspicious tampered tokens
-      auditService.logSecurityEvent('INVALID_JWT_PRESENTED', {
+      auditService.logOperationalSecurityEvent('INVALID_JWT_PRESENTED', {
         ip: req.ip,
         userAgent: req.headers['user-agent'],
         tokenPrefix: token.slice(0, 20),
@@ -1292,23 +1354,22 @@ export function requirePermission(permission: string) {
     const userPermissions = req.user.permissions ?? [];
 
     if (!userPermissions.includes(permission)) {
-      auditService.log({
+      auditService.logOperationalSecurityEvent('FORBIDDEN_ACCESS_ATTEMPT', {
         actorId:      req.user.id,
         institutionId: req.user.institutionId,
         actorRole:    req.user.role,
-        action:       'FORBIDDEN_ACCESS_ATTEMPT',
-        resourceType: 'Endpoint',
-        resourceId:   req.path,
-        metadata:     {
-          attemptedPermission: permission,
-          method: req.method,
-        },
+        path:         req.path,
+        attemptedPermission: permission,
+        method:       req.method,
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
       });
 
-      // Return 404 for existence-sensitive resources so attackers
-      // cannot confirm a resource exists before being denied
+      // 403, not 404: this is a capability check on the authenticated user,
+      // not a lookup of a specific resource — there is nothing whose
+      // existence could be confirmed or denied here. Existence-sensitive
+      // lookups (e.g. cross-institution access) use 404 instead — see
+      // enforceInstitutionScope (§6.5).
       res.status(403).json({ error: 'Forbidden', code: ErrorCode.FORBIDDEN });
       return;
     }
@@ -1394,7 +1455,7 @@ export function rateLimiter(name: string, opts: RateLimitOptions) {
       sendCommand: (...args: string[]) => redis.sendCommand(args),
     }),
     handler: (req, res) => {
-      auditService.logSecurityEvent('RATE_LIMIT_HIT', {
+      auditService.logOperationalSecurityEvent('RATE_LIMIT_HIT', {
         name,
         ip:     req.ip,
         userId: (req as any).user?.id,
@@ -1416,6 +1477,7 @@ export const authLimiter    = rateLimiter('auth',    { max: 5,   windowMs: 15 * 
 export const refreshLimiter = rateLimiter('refresh', { max: 10,  windowMs: 60_000 });
 export const registerLimiter= rateLimiter('register',{ max: 3,   windowMs: 60 * 60_000 });
 export const apiLimiter     = rateLimiter('api',     { max: 300, windowMs: 60_000 });
+export const verifyEmailLimiter = rateLimiter('verify-email', { max: 10, windowMs: 60 * 60_000 });
 ```
 
 ### 6.5 Institution Scoping Middleware
@@ -1505,27 +1567,56 @@ packages/backend/src/modules/auth/
 
 ```typescript
 // packages/backend/src/modules/auth/auth.service.ts
+import crypto from 'crypto';
 import { db } from '../../db/client.js';
+import { redis } from '../../config/redis.js';
 import { tokenService } from './token.service.js';
 import { passwordService } from './password.service.js';
 import { auditService } from '../../services/audit.service.js';
+import { emailService } from '../../services/email.service.js';
 import { AppError } from '../../utils/errors.js';
 import { ErrorCode, ROLE_PERMISSIONS } from 'shared';
-import type { LoginSchema, RegisterSchema } from 'shared';
+import type { LoginSchema, PublicRegisterSchema, StaffRegisterSchema, VerifyEmailSchema } from 'shared';
 import type { z } from 'zod';
 
 export class AuthService {
 
-  async register(data: z.infer<typeof RegisterSchema>, registeredBy?: string) {
+  // Public self-registration. Role is hardcoded to STUDENT — SEC-1 fix.
+  // Self-registered accounts start unverified (SEC-4) and receive a
+  // verification email; staff-created accounts are pre-verified below.
+  async register(data: z.infer<typeof PublicRegisterSchema>) {
+    const user = await this.createUser({ ...data, role: 'STUDENT' }, data.institutionId, undefined, false);
+    await this.sendVerificationEmail(user.id, user.email);
+    return user;
+  }
+
+  // Admin-invoked staff registration. institutionId comes from the caller's
+  // own JWT (passed in by the controller), never from the request body.
+  // Admin-created accounts are pre-verified — the admin's own institution
+  // membership is the trust signal, not an email round-trip (SEC-4).
+  async registerStaff(
+    data: z.infer<typeof StaffRegisterSchema>,
+    institutionId: string,
+    registeredBy: string,
+  ) {
+    return this.createUser(data, institutionId, registeredBy, true);
+  }
+
+  private async createUser(
+    data: { email: string; password: string; firstName: string; lastName: string; role: string },
+    institutionId: string,
+    registeredBy?: string,
+    preVerified = false,
+  ) {
     // 1. Verify institution exists and is active
     const institution = await db.institution.findFirst({
-      where: { id: data.institutionId, isActive: true },
+      where: { id: institutionId, isActive: true },
     });
     if (!institution) throw new AppError(404, 'Institution not found', ErrorCode.NOT_FOUND);
 
     // 2. Check email uniqueness within institution
     const existing = await db.user.findUnique({
-      where: { institutionId_email: { institutionId: data.institutionId, email: data.email } },
+      where: { institutionId_email: { institutionId, email: data.email } },
     });
     if (existing) throw new AppError(409, 'Email already registered', ErrorCode.CONFLICT);
 
@@ -1535,22 +1626,24 @@ export class AuthService {
     // 4. Create user
     const user = await db.user.create({
       data: {
-        institutionId: data.institutionId,
+        institutionId,
         email:         data.email,
         passwordHash,
         role:          data.role,
         firstName:     data.firstName,
         lastName:      data.lastName,
+        isEmailVerified: preVerified,
+        emailVerifiedAt: preVerified ? new Date() : null,
       },
       select: {
-        id: true, email: true, role: true,
+        id: true, email: true, role: true, isEmailVerified: true,
         firstName: true, lastName: true, institutionId: true,
       },
     });
 
     // 5. Audit log
     await auditService.log({
-      institutionId: data.institutionId,
+      institutionId,
       actorId:       registeredBy ?? user.id,
       action:        'USER_REGISTERED',
       resourceType:  'User',
@@ -1561,17 +1654,68 @@ export class AuthService {
     return user;
   }
 
+  // 24h one-time token, Redis-backed so verification doesn't require a new
+  // table — mirrors the entry-token pattern used for exam-session redemption.
+  private async sendVerificationEmail(userId: string, email: string): Promise<void> {
+    const rawToken  = crypto.randomBytes(32).toString('base64url');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    await redis.set(`email_verify:${tokenHash}`, userId, 'EX', 24 * 60 * 60);
+    await emailService.sendVerificationEmail(email, rawToken);
+  }
+
+  async verifyEmail(data: z.infer<typeof VerifyEmailSchema>) {
+    const tokenHash = crypto.createHash('sha256').update(data.token).digest('hex');
+    const key = `email_verify:${tokenHash}`;
+
+    const userId = await redis.get(key);
+    if (!userId) throw new AppError(401, 'Invalid or expired verification token', ErrorCode.TOKEN_INVALID);
+
+    await redis.del(key);  // single-use
+
+    const user = await db.user.update({
+      where: { id: userId },
+      data:  { isEmailVerified: true, emailVerifiedAt: new Date() },
+      select: { id: true, email: true, institutionId: true, isEmailVerified: true },
+    });
+
+    await auditService.log({
+      institutionId: user.institutionId,
+      actorId:       user.id,
+      action:        'EMAIL_VERIFIED',
+      resourceType:  'User',
+      resourceId:    user.id,
+    });
+
+    return user;
+  }
+
   async login(
     data: z.infer<typeof LoginSchema>,
     ip: string,
     userAgent: string,
   ) {
-    // 1. Find user by email (across all institutions — email is global login)
-    const user = await db.user.findFirst({
-      where: { email: data.email, isActive: true },
+    // 1. Resolve institution by slug, then find the user scoped to it —
+    // email is unique only per-institution (see User @@unique([institutionId, email]))
+    const institution = await db.institution.findFirst({
+      where: { slug: data.institutionSlug, isActive: true },
     });
+    const foundUser = institution
+      ? await db.user.findUnique({
+          where: { institutionId_email: { institutionId: institution.id, email: data.email } },
+        })
+      : null;
+    const user = foundUser?.isActive ? foundUser : null;
 
-    // 2. Always run hash verification even if user not found (timing attack prevention)
+    // 2. Check account lock before spending any Argon2 CPU — SEC-5 fix.
+    // A locked account now short-circuits on every attempt, whether or not
+    // the guessed password is correct (see risk note above).
+    if (user?.lockedUntil && user.lockedUntil > new Date()) {
+      throw new AppError(401, 'Account temporarily locked', ErrorCode.ACCOUNT_DISABLED);
+    }
+
+    // 3. Always run hash verification even if user not found (timing attack
+    // prevention for the not-found / wrong-password cases).
     const dummyHash = '$argon2id$v=19$m=65536,t=3,p=4$dummydummydummy';
     const passwordMatch = await passwordService.verify(
       user?.passwordHash ?? dummyHash,
@@ -1583,23 +1727,24 @@ export class AuthService {
         await this.recordFailedLogin(user.id);
       }
       await auditService.logSecurityEvent('LOGIN_FAILED', {
-        email: data.email, ip, userAgent,
+        email: data.email, institutionSlug: data.institutionSlug, ip, userAgent,
       });
       throw new AppError(401, 'Invalid credentials', ErrorCode.INVALID_CREDENTIALS);
     }
 
-    // 3. Check account lock
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
-      throw new AppError(401, 'Account temporarily locked', ErrorCode.ACCOUNT_DISABLED);
+    // 4. Self-registered accounts must verify their email before they can
+    // log in (SEC-4). Staff-created accounts are pre-verified at creation.
+    if (!user.isEmailVerified) {
+      throw new AppError(403, 'Email not verified', ErrorCode.EMAIL_NOT_VERIFIED);
     }
 
-    // 4. Reset failed attempts on success
+    // 5. Reset failed attempts on success
     await db.user.update({
       where: { id: user.id },
       data:  { failedLoginAttempts: 0, lockedUntil: null, lastLoginAt: new Date() },
     });
 
-    // 5. Generate token pair
+    // 6. Generate token pair
     const permissions = ROLE_PERMISSIONS[user.role];
     const { accessToken, refreshToken } = await tokenService.generateTokenPair({
       userId:        user.id,
@@ -1859,15 +2004,29 @@ import { Router } from 'express';
 import { authController } from './auth.controller.js';
 import { validate } from '../../middleware/validate.middleware.js';
 import { authenticate } from '../../middleware/authenticate.middleware.js';
-import { authLimiter, refreshLimiter, registerLimiter } from '../../middleware/rate-limiter.middleware.js';
-import { LoginSchema, RegisterSchema } from 'shared';
+import { requireAnyPermission } from '../../middleware/rbac.middleware.js';
+import { authLimiter, refreshLimiter, registerLimiter, verifyEmailLimiter } from '../../middleware/rate-limiter.middleware.js';
+import { LoginSchema, PublicRegisterSchema, StaffRegisterSchema, VerifyEmailSchema, Permission } from 'shared';
 
 export const authRouter = Router();
 
 authRouter.post('/register',
   registerLimiter,
-  validate(RegisterSchema),
+  validate(PublicRegisterSchema),
   authController.register,
+);
+
+authRouter.post('/register-staff',
+  authenticate,
+  requireAnyPermission(Permission.MANAGE_TEACHERS, Permission.MANAGE_STUDENTS),
+  validate(StaffRegisterSchema),
+  authController.registerStaff,
+);
+
+authRouter.post('/verify-email',
+  verifyEmailLimiter,
+  validate(VerifyEmailSchema),
+  authController.verifyEmail,
 );
 
 authRouter.post('/login',
@@ -1895,6 +2054,7 @@ authRouter.get('/me',
 ```typescript
 // packages/backend/src/modules/auth/auth.controller.ts
 import type { Request, Response } from 'express';
+import type { AuthenticatedRequest } from '../../types/request.js';
 import { authService } from './auth.service.js';
 import { env } from '../../config/env.js';
 
@@ -1909,8 +2069,18 @@ const COOKIE_OPTIONS = {
 
 export const authController = {
   register: async (req: Request, res: Response) => {
-    const user = await authService.register(req.body, undefined);
+    const user = await authService.register(req.body);
     res.status(201).json({ user });
+  },
+
+  registerStaff: async (req: AuthenticatedRequest, res: Response) => {
+    const user = await authService.registerStaff(req.body, req.user.institutionId, req.user.id);
+    res.status(201).json({ user });
+  },
+
+  verifyEmail: async (req: Request, res: Response) => {
+    const user = await authService.verifyEmail(req.body);
+    res.json({ user });
   },
 
   login: async (req: Request, res: Response) => {
@@ -1958,6 +2128,49 @@ export const authController = {
 };
 ```
 
+### 7.6 Email Service
+
+```typescript
+// packages/backend/src/services/email.service.ts
+import { env } from '../config/env.js';
+import { logger } from '../utils/logger.js';
+
+export class EmailService {
+  async sendVerificationEmail(to: string, rawToken: string): Promise<void> {
+    const verifyUrl = `${env.FRONTEND_URL}/verify-email?token=${encodeURIComponent(rawToken)}`;
+
+    try {
+      const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.SENDGRID_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: to }] }],
+          from:    { email: env.SENDGRID_FROM_EMAIL },
+          subject: 'Verify your email address',
+          content: [{
+            type:  'text/plain',
+            value: `Welcome! Verify your email by visiting: ${verifyUrl}\n\nThis link expires in 24 hours.`,
+          }],
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (!response.ok) throw new Error(`SendGrid API error: ${response.status}`);
+
+    } catch (err) {
+      // Fail open — registration must not fail because the email provider
+      // is down. The user can request a new verification email later.
+      logger.error({ err, to }, 'Failed to send verification email');
+    }
+  }
+}
+
+export const emailService = new EmailService();
+```
+
 ---
 
 ## 8. Institution & User Module
@@ -1991,15 +2204,17 @@ export class InstitutionService {
   }
 
   async list(page: number, limit: number) {
+    const safePage  = Math.max(page, 1);
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
     const [items, total] = await Promise.all([
       db.institution.findMany({
-        skip:    (page - 1) * limit,
-        take:    limit,
+        skip:    (safePage - 1) * safeLimit,
+        take:    safeLimit,
         orderBy: { createdAt: 'desc' },
       }),
       db.institution.count(),
     ]);
-    return { items, total, page, limit };
+    return { items, total, page: safePage, limit: safeLimit };
   }
 }
 ```
@@ -2016,11 +2231,13 @@ export class UserService {
 
   // All queries are scoped to institutionId from token — never from params
   async listByRole(institutionId: string, role: string, page: number, limit: number) {
+    const safePage  = Math.max(page, 1);
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
     const [items, total] = await Promise.all([
       db.user.findMany({
         where:   { institutionId, role: role as any, isActive: true },
-        skip:    (page - 1) * limit,
-        take:    limit,
+        skip:    (safePage - 1) * safeLimit,
+        take:    safeLimit,
         select:  {
           id: true, email: true, firstName: true, lastName: true,
           role: true, lastLoginAt: true, isActive: true, createdAt: true,
@@ -2029,7 +2246,7 @@ export class UserService {
       }),
       db.user.count({ where: { institutionId, role: role as any, isActive: true } }),
     ]);
-    return { items, total, page, limit };
+    return { items, total, page: safePage, limit: safeLimit };
   }
 
   async deactivate(institutionId: string, userId: string) {
@@ -2081,6 +2298,7 @@ import { db } from '../../db/client.js';
 import { AppError } from '../../utils/errors.js';
 import { ErrorCode, ExamStatus, EXAM_STATUS_TRANSITIONS } from 'shared';
 import { examHashService } from './exam-hash.service.js';
+import { approvalService } from './approval.service.js';
 import { auditService } from '../../services/audit.service.js';
 import type { z } from 'zod';
 import type { CreateExamSchema } from 'shared';
@@ -2115,6 +2333,9 @@ export class ExamService {
         proctoringTier:  data.proctoringTier,
         settings:        data.settings,
         status:          'DRAFT',
+        autoSubmitRiskThreshold: data.autoSubmitRiskThreshold,
+        maxSilentReconnects:     data.maxSilentReconnects,
+        reconnectPenaltyBase:    data.reconnectPenaltyBase,
       },
     });
 
@@ -2150,6 +2371,34 @@ export class ExamService {
     let contentHash: string | undefined;
     if (targetStatus === 'PENDING_APPROVAL') {
       contentHash = await examHashService.computeHash(examId);
+    }
+
+    // Publish re-verifies the approval is still bound to the exact content
+    // that was signed — a question edited after approval (IMP-6) changes
+    // computeHash()'s output without ever touching the Exam row, so this is
+    // the last checkpoint before the exam becomes visible to students.
+    if (targetStatus === 'PUBLISHED') {
+      const hashValid = await examHashService.verifyHash(examId, exam.contentHash!);
+      const signatureValid = hashValid && approvalService.verifySignature(
+        exam.contentHash!, exam.approverId!, exam.approvalSignature!,
+      );
+
+      if (!hashValid || !signatureValid) {
+        await db.exam.update({
+          where: { id: examId },
+          data: {
+            status:            'DRAFT',
+            contentHash:       null,
+            approvalSignature: null,
+            approverId:        null,
+            approvedAt:        null,
+          },
+        });
+        throw new AppError(409,
+          'Exam content changed since approval — resubmit for approval before publishing',
+          ErrorCode.CONTENT_HASH_MISMATCH,
+        );
+      }
     }
 
     // Clear approval signature if reverting to DRAFT after approval
@@ -2192,14 +2441,35 @@ export class ExamService {
       throw new AppError(409, 'Cannot edit exam in current status', ErrorCode.INVALID_STATUS_TRANSITION);
     }
 
+    // Re-validate class ownership only when the exam is being reassigned to a
+    // different class — same check create() performs (IMP-5).
+    if (data.classId != null && data.classId !== exam.classId) {
+      const cls = await db.class.findFirst({
+        where: { id: data.classId, institutionId },
+      });
+      if (!cls) throw new AppError(404, 'Class not found', ErrorCode.NOT_FOUND);
+    }
+
     // Any edit to an APPROVED exam auto-reverts to DRAFT and clears approval
     const wasApproved = exam.status === 'APPROVED';
 
     const updated = await db.exam.update({
       where: { id: examId },
       data: {
-        ...data,
+        // Explicit whitelist — `data` is Partial<CreateExamSchema>, which
+        // includes `duration` (a Zod field, not a Prisma column); spreading
+        // it directly throws an unknown-arg error at the DB layer (IMP-5).
+        title:           data.title,
+        description:     data.description,
+        classId:         data.classId,
+        startTime:       data.startTime,
+        endTime:         data.endTime,
         durationSeconds: data.duration != null ? data.duration * 60 : undefined,
+        proctoringTier:  data.proctoringTier,
+        settings:        data.settings,
+        autoSubmitRiskThreshold: data.autoSubmitRiskThreshold,
+        maxSilentReconnects:     data.maxSilentReconnects,
+        reconnectPenaltyBase:    data.reconnectPenaltyBase,
         status:              wasApproved ? 'DRAFT' : exam.status,
         contentHash:         wasApproved ? null : exam.contentHash,
         approvalSignature:   wasApproved ? null : exam.approvalSignature,
@@ -2383,6 +2653,18 @@ export class ApprovalService {
     });
   }
 
+  // Re-derives the same per-approver secret and recomputes the HMAC —
+  // lets a caller confirm a stored signature is still valid for a given
+  // hash, without re-approving (IMP-6, used at publish time).
+  verifySignature(contentHash: string, approverId: string, signature: string): boolean {
+    const approverSecret = this.deriveApproverSecret(approverId);
+    const expected = crypto
+      .createHmac('sha256', approverSecret)
+      .update(contentHash)
+      .digest('hex');
+    return crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(signature, 'hex'));
+  }
+
   private deriveApproverSecret(approverId: string): Buffer {
     // HKDF-style derivation from master secret
     return crypto.hkdfSync(
@@ -2405,11 +2687,45 @@ export const approvalService = new ApprovalService();
 ### 10.1 Question Service
 
 ```typescript
+// packages/backend/src/lib/seeded-shuffle.ts
+
+// Deterministic Fisher-Yates shuffle seeded from a string (DB-3). The same
+// seed + same input order always produces the same output order, so a
+// resumed session sees identical option ordering across reconnects.
+function seededRandom(seed: string): () => number {
+  let h = 1779033703 ^ seed.length;
+  for (let i = 0; i < seed.length; i++) {
+    h = Math.imul(h ^ seed.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return () => {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  };
+}
+
+export function seededShuffle<T>(items: T[], seed: string): T[] {
+  const rand = seededRandom(seed);
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+```
+
+```typescript
 // packages/backend/src/modules/questions/question.service.ts
+import crypto from 'crypto';
 import { db } from '../../db/client.js';
 import { AppError } from '../../utils/errors.js';
 import { ErrorCode } from 'shared';
 import { cryptoService } from '../../services/crypto.service.js';
+import { auditService } from '../../services/audit.service.js';
+import { seededShuffle } from '../../lib/seeded-shuffle.js';
 import type { z } from 'zod';
 import type { CreateQuestionSchema } from 'shared';
 import DOMPurify from 'dompurify';
@@ -2472,16 +2788,117 @@ export class QuestionService {
     return question;
   }
 
+  // Edit an existing question — creates a new content version and, if any
+  // APPROVED exam references it, reverts that exam to DRAFT: the approver's
+  // signature is bound to the exact content this edit just changed (IMP-6).
+  async update(
+    questionId: string,
+    teacherId: string,
+    institutionId: string,
+    data: Partial<z.infer<typeof CreateQuestionSchema>>,
+  ) {
+    const question = await db.question.findFirst({
+      where: { id: questionId, bank: { ownerId: teacherId, institutionId } },
+    });
+    if (!question) throw new AppError(404, 'Question not found', ErrorCode.NOT_FOUND);
+
+    const effectiveType = data.type ?? question.type;
+    if (data.options && ['MCQ', 'MSQ'].includes(effectiveType)) {
+      const correctCount = data.options.filter(o => o.isCorrect).length;
+      if (effectiveType === 'MCQ' && correctCount !== 1) {
+        throw new AppError(400, 'MCQ must have exactly one correct option', ErrorCode.VALIDATION_ERROR);
+      }
+      if (effectiveType === 'MSQ' && correctCount < 2) {
+        throw new AppError(400, 'MSQ must have at least two correct options', ErrorCode.VALIDATION_ERROR);
+      }
+    }
+
+    const contentPayload = data.content
+      ? JSON.stringify({
+          text:     purify.sanitize(data.content.text, { ALLOWED_TAGS: ['b','i','u','em','strong','sub','sup','code','br','p','ul','ol','li'], ALLOWED_ATTR: [] }),
+          imageUrl: data.content.imageUrl,
+        })
+      : undefined;
+
+    const optionsPayload = data.options
+      ? JSON.stringify(data.options.map(o => ({
+          id:        crypto.randomUUID(),
+          text:      purify.sanitize(o.text, { ALLOWED_TAGS: [] }),
+          isCorrect: o.isCorrect,
+        })))
+      : undefined;
+
+    const updated = await db.question.update({
+      where: { id: questionId },
+      data: {
+        type:                 data.type,
+        marks:                data.marks,
+        difficulty:           data.difficulty,
+        tags:                 data.tags,
+        encryptedContent:     contentPayload ? cryptoService.encryptQuestion(contentPayload) : undefined,
+        encryptedOptions:     optionsPayload ? cryptoService.encryptQuestion(optionsPayload) : undefined,
+        encryptedAnswerKey:   data.answerKey !== undefined ? cryptoService.encryptQuestion(data.answerKey) : undefined,
+        encryptedExplanation: data.explanation !== undefined ? cryptoService.encryptQuestion(data.explanation) : undefined,
+        version:              { increment: 1 },
+      },
+    });
+
+    // Revert every APPROVED exam that references this question — its
+    // approval was signed over content this edit just invalidated.
+    const affectedExams = await db.exam.findMany({
+      where: {
+        institutionId,
+        status:   'APPROVED',
+        sections: { some: { examQuestions: { some: { questionId } } } },
+      },
+      select: { id: true },
+    });
+
+    for (const affected of affectedExams) {
+      await db.exam.update({
+        where: { id: affected.id },
+        data: {
+          status:            'DRAFT',
+          contentHash:       null,
+          approvalSignature: null,
+          approverId:        null,
+          approvedAt:        null,
+        },
+      });
+      await auditService.log({
+        institutionId,
+        actorId:      teacherId,
+        action:       'EXAM_APPROVAL_INVALIDATED',
+        resourceType: 'Exam',
+        resourceId:   affected.id,
+        metadata:     { reason: 'referenced question edited', questionId },
+      });
+    }
+
+    return updated;
+  }
+
   // Decrypt and return question content — only called for authorized delivery
   async getDecryptedForDelivery(questionId: string, sessionId: string) {
     const q = await db.question.findUnique({ where: { id: questionId } });
     if (!q) throw new AppError(404, 'Question not found', ErrorCode.NOT_FOUND);
 
     const content = JSON.parse(cryptoService.decryptQuestion(q.encryptedContent));
-    const options  = q.encryptedOptions
+    let options  = q.encryptedOptions
       ? JSON.parse(cryptoService.decryptQuestion(q.encryptedOptions))
         .map((o: any) => ({ id: o.id, text: o.text }))  // strip isCorrect from delivery
       : undefined;
+
+    if (options) {
+      const session = await db.examSession.findUnique({
+        where:  { id: sessionId },
+        select: { shuffleSeed: true, exam: { select: { settings: true } } },
+      });
+      const shuffleOptions = (session?.exam.settings as any)?.shuffleOptions === true;
+      if (shuffleOptions && session?.shuffleSeed) {
+        options = seededShuffle(options, `${session.shuffleSeed}:${questionId}`);
+      }
+    }
 
     return {
       id:         q.id,
@@ -2640,6 +3057,34 @@ export class SessionService {
       throw new AppError(401, 'Token binding mismatch', ErrorCode.TOKEN_INVALID);
     }
 
+    // Enforce the IP/device binding captured at entry-token issuance — a
+    // token captured within its 5-minute TTL must be redeemed from the same
+    // device and network it was issued to (FR-023).
+    const ipMismatch     = storedData.ip !== ip;
+    const deviceMismatch = storedData.deviceFingerprintHash !== deviceId;
+    if (ipMismatch || deviceMismatch) {
+      const existingSession = await db.examSession.findUnique({
+        where: { examId_studentId: { examId: payload.examId, studentId } },
+      });
+      if (existingSession) {
+        await db.proctoringFlag.create({
+          data: {
+            sessionId:  existingSession.id,
+            flagType:   deviceMismatch ? 'DEVICE_MISMATCH' : 'IP_CHANGE',
+            confidence: 1,
+            metadata:   {
+              boundIp: storedData.ip, connectingIp: ip,
+              boundDevice: storedData.deviceFingerprintHash, connectingDevice: deviceId,
+            },
+          },
+        });
+      }
+      await auditService.logSecurityEvent(deviceMismatch ? 'DEVICE_MISMATCH' : 'IP_CHANGE', {
+        studentId, examId: payload.examId, ip, deviceId,
+      });
+      throw new AppError(401, 'Entry token redeemed from a different device or network', ErrorCode.TOKEN_INVALID);
+    }
+
     const exam = await db.exam.findUniqueOrThrow({
       where:   { id: payload.examId },
       include: { sections: { include: { examQuestions: { orderBy: { order: 'asc' } } }, orderBy: { order: 'asc' } } },
@@ -2654,6 +3099,7 @@ export class SessionService {
         ipAtStart:         ip,
         deviceId,
         contentHashAtStart: exam.contentHash,
+        shuffleSeed:       crypto.randomBytes(16).toString('hex'),
         entryTokenHash:    null,   // clear token — it's been used
         entryTokenExpiry:  null,
       },
@@ -2665,6 +3111,16 @@ export class SessionService {
       new Date(exam.endTime).getTime(),
     );
     await redis.set(KEYS.sessionTimer(session.id), endTime.toString(), 'EXAT', Math.ceil(endTime / 1000));
+
+    // Durable, session-owned deadline — authoritative regardless of socket
+    // state (REL-1). jobId is namespaced to avoid colliding with the
+    // reconnect-timeout job family on the same queue.
+    const { autoSubmitQueue } = await import('../../jobs/queues.js');
+    await autoSubmitQueue.add(
+      'exam-expiry',
+      { sessionId: session.id, reason: 'TIME_EXPIRED' },
+      { jobId: `expiry:${session.id}`, delay: Math.max(0, endTime - startedAt.getTime()) },
+    );
 
     // Resume token for reconnects
     await this.reissueResumeToken(session.id, payload.deviceFingerprintHash);
@@ -2718,6 +3174,16 @@ export class SessionService {
 
   // ── Auto-submission on timer expiry ───────────────────────────
   async autoSubmit(sessionId: string) {
+    const existing = await db.examSession.findUnique({
+      where:  { id: sessionId },
+      select: { status: true, examId: true },
+    });
+    // Already finalized by another path (voluntary submit, risk threshold,
+    // or the other durable job family racing this one) — nothing to do.
+    if (!existing || ['SUBMITTED', 'AUTO_SUBMITTED'].includes(existing.status)) {
+      return null;
+    }
+
     await db.examSession.update({
       where: { id: sessionId },
       data:  {
@@ -2731,11 +3197,22 @@ export class SessionService {
     const { gradingQueue } = await import('../../jobs/queues.js');
     await gradingQueue.add('grade-session', { sessionId });
 
+    // Cancel any still-pending durable job for this session so it can't
+    // fire again against an already-finalized session.
+    const { autoSubmitQueue } = await import('../../jobs/queues.js');
+    const [expiryJob, reconnectJob] = await Promise.all([
+      autoSubmitQueue.getJob(`expiry:${sessionId}`),
+      autoSubmitQueue.getJob(`reconnect:${sessionId}`),
+    ]);
+    await Promise.all([expiryJob?.remove(), reconnectJob?.remove()]);
+
     await auditService.log({
       action:       'SESSION_AUTO_SUBMITTED',
       resourceType: 'ExamSession',
       resourceId:   sessionId,
     });
+
+    return { sessionId, examId: existing.examId };
   }
 
   // ── Voluntary submission ───────────────────────────────────────
@@ -2749,6 +3226,10 @@ export class SessionService {
 
     const { gradingQueue } = await import('../../jobs/queues.js');
     await gradingQueue.add('grade-session', { sessionId });
+
+    const { autoSubmitQueue } = await import('../../jobs/queues.js');
+    const pendingExpiry = await autoSubmitQueue.getJob(`expiry:${sessionId}`);
+    await pendingExpiry?.remove();
   }
 
   // JOIN = entry token + gates. RESUME = reattach PAUSED (no gates).
@@ -2808,10 +3289,26 @@ export class SessionService {
       );
     }
 
-    // Cancel the pending auto-submit job as jobId is the sessionId.
     const { autoSubmitQueue } = await import('../../jobs/queues.js');
-    const pendingJob = await autoSubmitQueue.getJob(sessionId);
-    await pendingJob?.remove();
+    // Cancel the pending reconnect-timeout job — student is back.
+    const pendingReconnect = await autoSubmitQueue.getJob(`reconnect:${sessionId}`);
+    await pendingReconnect?.remove();
+
+    // Self-heal the expiry job: re-add with jobId `expiry:${sessionId}` is
+    // a no-op if it's still scheduled, and recreates it if it was somehow
+    // lost (queue restart, manual removal). Deadline is wall-clock from
+    // session start — never extended by a disconnect/resume cycle.
+    const endTime = await this.getOrRecoverEndTime(sessionId);
+    if (endTime !== null) {
+      const remaining = endTime - Date.now();
+      if (remaining > 0) {
+        await autoSubmitQueue.add(
+          'exam-expiry',
+          { sessionId, reason: 'TIME_EXPIRED' },
+          { jobId: `expiry:${sessionId}`, delay: remaining },
+        );
+      }
+    }
 
     const resumed = await db.examSession.update({
       where: { id: sessionId },
@@ -2848,9 +3345,33 @@ export class SessionService {
     return session;
   }
 
+  // Resolves the authoritative deadline for a session. Redis
+  // (`session:timer`) is a cache, not the source of truth (REL-2) — it's
+  // an LRU-evictable key with a TTL, so a miss must fall back to computing
+  // from the DB (startedAt + exam.durationSeconds, capped by exam.endTime)
+  // rather than being treated as "no deadline." The recomputed value is
+  // written back to Redis so subsequent reads hit the cache again.
+  private async getOrRecoverEndTime(sessionId: string): Promise<number | null> {
+    const cached = await redis.get(KEYS.sessionTimer(sessionId));
+    if (cached) return parseInt(cached);
+
+    const session = await db.examSession.findUnique({
+      where:  { id: sessionId },
+      select: { startedAt: true, exam: { select: { durationSeconds: true, endTime: true } } },
+    });
+    if (!session?.startedAt) return null;
+
+    const endTime = Math.min(
+      session.startedAt.getTime() + session.exam.durationSeconds * 1000,
+      new Date(session.exam.endTime).getTime(),
+    );
+    await redis.set(KEYS.sessionTimer(sessionId), endTime.toString(), 'EXAT', Math.ceil(endTime / 1000));
+    return endTime;
+  }
+
   private async verifyNotExpired(sessionId: string) {
-    const endTimeStr = await redis.get(KEYS.sessionTimer(sessionId));
-    if (endTimeStr && Date.now() > parseInt(endTimeStr)) {
+    const endTime = await this.getOrRecoverEndTime(sessionId);
+    if (endTime !== null && Date.now() > endTime) {
       await this.autoSubmit(sessionId);
       throw new AppError(403, 'Exam time expired', ErrorCode.EXAM_ENDED);
     }
@@ -2873,6 +3394,8 @@ import { db } from '../../db/client.js';
 import { AppError } from '../../utils/errors.js';
 import { ErrorCode } from 'shared';
 import { ipIntelService } from '../../services/ip-intel.service.js';
+import { auditService } from '../../services/audit.service.js';
+import { env } from '../../config/env.js';
 
 interface DeviceFingerprint {
   platform:       string;
@@ -2920,6 +3443,11 @@ export class DeviceService {
   ): Promise<{ allPassed: boolean; results: GateResult[] }> {
     const results: GateResult[] = [];
 
+    const exam = await db.exam.findUniqueOrThrow({
+      where:  { id: examId },
+      select: { proctoringTier: true },
+    });
+
     // Gate 1 — Device registered
     const device = await db.deviceProfile.findFirst({
       where: { userId: studentId, fingerprintHash, revokedAt: null },
@@ -2962,10 +3490,25 @@ export class DeviceService {
 
     // Gate 6 — IP intelligence (VPN/proxy check)
     const ipResult = await ipIntelService.check(ip);
+
+    if (ipResult.unknown) {
+      // Recorded regardless of pass/fail outcome below — keyed by examId +
+      // studentId since no ExamSession row exists yet at this point in the
+      // flow. IntegrityReportService surfaces this marker (API-4).
+      await auditService.logSecurityEvent('IP_INTEL_UNKNOWN', { studentId, examId, ip });
+    }
+
+    // Higher proctoring tiers have live oversight to handle a retry, so an
+    // unverifiable IP fails the gate there even when fail-open is on.
+    // Fail-open is an explicit operator config (default true) (API-4).
+    const higherTier = (['LIVE_AI_ESCALATION', 'FULL_LIVE_HUMAN'] as string[]).includes(exam.proctoringTier);
+    const ipIntelFailed = ipResult.unknown && (!env.IP_INTEL_FAIL_OPEN || higherTier);
+
     results.push({
       gate:   'IP_INTELLIGENCE',
-      passed: !ipResult.isVPN && !ipResult.isProxy && !ipResult.isDatacenter,
-      reason: ipResult.isVPN ? 'VPN detected. Disable VPN to continue.' :
+      passed: !ipIntelFailed && !ipResult.isVPN && !ipResult.isProxy && !ipResult.isDatacenter,
+      reason: ipIntelFailed ? 'Unable to verify network reputation. Please retry or contact your proctor.' :
+              ipResult.isVPN ? 'VPN detected. Disable VPN to continue.' :
               ipResult.isProxy ? 'Proxy detected.' : undefined,
     });
 
@@ -3009,11 +3552,13 @@ import jwt from 'jsonwebtoken';
 import { keys } from '../config/keys.js';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { redis } from '../config/redis.js';
+import { db } from '../db/client.js';
 import { examNamespace } from './namespaces/exam.namespace.js';
 import { proctoringNamespace } from './namespaces/proctoring.namespace.js';
 import { mobileNamespace } from './namespaces/mobile.namespace.js';
 import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
+import { Permission } from 'shared';
 
 export function createWebSocketServer(httpServer: HttpServer) {
   const io = new Server(httpServer, {
@@ -3031,6 +3576,17 @@ export function createWebSocketServer(httpServer: HttpServer) {
   const pubClient  = redis.duplicate();
   const subClient  = redis.duplicate();
   io.adapter(createAdapter(pubClient, subClient));
+
+  // Bridge for auto-submit jobs completed by the BullMQ worker process
+  // (§16.1a), which holds no live Socket.IO reference of its own.
+  const autoSubmitNotifyClient = redis.duplicate();
+  autoSubmitNotifyClient.subscribe('session:auto-submitted');
+  autoSubmitNotifyClient.on('message', (_channel, message) => {
+    const { sessionId, examId, reason } = JSON.parse(message);
+    io.of(`/exam/${examId}`).to(`session:${sessionId}`).emit('exam:auto-submitted', { reason });
+    io.of(`/exam/${examId}`).in(`session:${sessionId}`).disconnectSockets(true);
+    io.of('/proctor').to(`exam:${examId}`).emit('session:auto-submitted', { sessionId, reason });
+  });
 
   // Shared JWT authentication middleware for all namespaces
   io.use(async (socket, next) => {
@@ -3053,7 +3609,21 @@ export function createWebSocketServer(httpServer: HttpServer) {
   // ── Namespace: /exam/{examId} — student exam sessions ────────
   // Dynamic namespace: one per exam_id
   io.of(/^\/exam\/[a-f0-9-]{36}$/).use(async (socket, next) => {
+    const user   = socket.data['user'];
     const examId = socket.nsp.name.split('/exam/')[1]!;
+
+    // Authorization (SEC-6): the shared io.use() above only verifies the
+    // JWT signature — it does not check that this token may take this exam.
+    if (!user.permissions?.includes(Permission.TAKE_EXAM)) {
+      return next(new Error('FORBIDDEN'));
+    }
+    const exam = await db.exam.findFirst({ where: { id: examId, institutionId: user.institutionId } });
+    if (!exam) return next(new Error('FORBIDDEN'));
+    const enrollment = await db.examEnrollment.findUnique({
+      where: { examId_studentId: { examId, studentId: user.sub } },
+    });
+    if (!enrollment) return next(new Error('FORBIDDEN'));
+
     socket.data['examId'] = examId;
     next();
   }).on('connection', (socket) => {
@@ -3061,12 +3631,28 @@ export function createWebSocketServer(httpServer: HttpServer) {
   });
 
   // ── Namespace: /proctor — teacher/proctor dashboard ──────────
-  io.of('/proctor').on('connection', (socket) => {
+  // Authorization (SEC-6): namespace-level permission gate. Per-exam room
+  // joins would need further scoping inside proctoringNamespace.handleConnection
+  // (not yet specified in the LLD — see §13 scope note).
+  io.of('/proctor').use(async (socket, next) => {
+    const user = socket.data['user'];
+    if (!user.permissions?.includes(Permission.VIEW_LIVE_SESSIONS)) {
+      return next(new Error('FORBIDDEN'));
+    }
+    next();
+  }).on('connection', (socket) => {
     proctoringNamespace.handleConnection(socket, io);
   });
 
   // ── Namespace: /mobile — secondary device camera ──────────────
-  io.of('/mobile').on('connection', (socket) => {
+  // Authorization (SEC-6): only exam-takers may pair a secondary device.
+  io.of('/mobile').use(async (socket, next) => {
+    const user = socket.data['user'];
+    if (!user.permissions?.includes(Permission.TAKE_EXAM)) {
+      return next(new Error('FORBIDDEN'));
+    }
+    next();
+  }).on('connection', (socket) => {
     mobileNamespace.handleConnection(socket, io);
   });
 
@@ -3078,12 +3664,32 @@ export function createWebSocketServer(httpServer: HttpServer) {
 ### 13.2 Exam Namespace Handler
 
 ```typescript
+// packages/backend/src/utils/client-ip.ts
+
+// Mirrors Express's `trust proxy: 1` semantics for the Socket.IO handshake
+// (API-3) — the handshake is a raw Node HTTP request and does NOT inherit
+// Express's trust-proxy setting. With exactly one trusted hop (the
+// gateway/LB), the real client IP is the left-most X-Forwarded-For entry
+// if present, else the raw socket address.
+export function getClientIp(handshake: {
+  address: string;
+  headers: Record<string, string | string[] | undefined>;
+}): string {
+  const forwarded = handshake.headers['x-forwarded-for'];
+  const first = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  return first ? first.split(',')[0]!.trim() : handshake.address;
+}
+```
+
+```typescript
 // packages/backend/src/websocket/namespaces/exam.namespace.ts
 import type { Socket, Server } from 'socket.io';
 import { sessionService } from '../../modules/sessions/session.service.js';
 import { proctoringService } from '../../modules/proctoring/proctoring.service.js';
 import { redis } from '../../config/redis.js';
 import { logger } from '../../utils/logger.js';
+import { getClientIp } from '../../utils/client-ip.js';
+import { ErrorCode, ResumeSchema, SubmitAnswerSchema, TelemetryBatchSchema, AnalysisResultSchema } from 'shared';
 
 // ── Inbound events (client → server) ─────────────────────────
 const CLIENT_EVENTS = {
@@ -3104,6 +3710,7 @@ export const SERVER_EVENTS = {
   TIMER_SYNC:          'timer:sync',
   EXAM_TERMINATED:     'exam:terminated',
   EXAM_AUTO_SUBMITTED: 'exam:auto-submitted',
+  EXAM_SUBMITTED:      'exam:submitted',
   PROCTOR_MESSAGE:     'proctor:message',
   PROCTOR_ACTION:      'proctor:action',
   SESSION_STATE:       'session:state',
@@ -3123,7 +3730,7 @@ export const examNamespace = {
         const session = await sessionService.startSession(
           payload.entryToken,
           user.sub,
-          socket.handshake.address,
+          getClientIp(socket.handshake),
           payload.deviceId,
         );
 
@@ -3158,12 +3765,15 @@ export const examNamespace = {
     });
 
     // RESUME: reattach PAUSED session. Validates token, cancels auto-submit, no gate re-run.
-    socket.on(CLIENT_EVENTS.RESUME, async (payload: {
-      sessionId: string; resumeToken: string; deviceFingerprintHash: string;
-    }) => {
+    socket.on(CLIENT_EVENTS.RESUME, async (payload: unknown) => {
+      const parsed = ResumeSchema.safeParse(payload);
+      if (!parsed.success) {
+        socket.emit(SERVER_EVENTS.ERROR, { code: ErrorCode.VALIDATION_ERROR, message: 'Invalid resume payload' });
+        return;
+      }
       try {
         const session = await sessionService.validateResumeToken(
-          payload.sessionId, user.sub, payload.resumeToken, payload.deviceFingerprintHash, io,
+          parsed.data.sessionId, user.sub, parsed.data.resumeToken, parsed.data.deviceFingerprintHash, io,
         );
 
         const activeSocketKey = `ws:session:${session.id}`;
@@ -3191,15 +3801,20 @@ export const examNamespace = {
     });
 
     // ── ANSWER SUBMISSION ─────────────────────────────────────
-    socket.on(CLIENT_EVENTS.SUBMIT_ANSWER, async (payload) => {
+    socket.on(CLIENT_EVENTS.SUBMIT_ANSWER, async (payload: unknown) => {
       const sessionId = socket.data['sessionId'];
       if (!sessionId) return;
+      const parsed = SubmitAnswerSchema.safeParse(payload);
+      if (!parsed.success) {
+        socket.emit(SERVER_EVENTS.ERROR, { code: ErrorCode.VALIDATION_ERROR, message: 'Invalid answer payload' });
+        return;
+      }
       try {
         await sessionService.submitAnswer(
           sessionId, user.sub,
-          payload.questionId, payload.response, payload.timeSpentMs,
+          parsed.data.questionId, parsed.data.response, parsed.data.timeSpentMs,
         );
-        socket.emit('answer:ack', { questionId: payload.questionId, savedAt: Date.now() });
+        socket.emit('answer:ack', { questionId: parsed.data.questionId, savedAt: Date.now() });
       } catch (err: any) {
         socket.emit(SERVER_EVENTS.ERROR, { code: err.code, message: err.message });
       }
@@ -3211,7 +3826,7 @@ export const examNamespace = {
       if (!sessionId) return;
       try {
         await sessionService.submit(sessionId, user.sub);
-        socket.emit(SERVER_EVENTS.EXAM_AUTO_SUBMITTED, { submittedAt: Date.now() });
+        socket.emit(SERVER_EVENTS.EXAM_SUBMITTED, { submittedAt: Date.now() });
         socket.disconnect();
       } catch (err: any) {
         socket.emit(SERVER_EVENTS.ERROR, { code: err.code, message: err.message });
@@ -3219,17 +3834,27 @@ export const examNamespace = {
     });
 
     // ── TELEMETRY BATCH ──────────────────────────────────────
-    socket.on(CLIENT_EVENTS.TELEMETRY_BATCH, async (payload) => {
+    socket.on(CLIENT_EVENTS.TELEMETRY_BATCH, async (payload: unknown) => {
       const sessionId = socket.data['sessionId'];
       if (!sessionId) return;
-      await proctoringService.ingestTelemetry(sessionId, user.sub, payload.events);
+      const parsed = TelemetryBatchSchema.safeParse(payload);
+      if (!parsed.success) {
+        socket.emit(SERVER_EVENTS.ERROR, { code: ErrorCode.VALIDATION_ERROR, message: 'Invalid telemetry batch' });
+        return;
+      }
+      await proctoringService.ingestTelemetry(sessionId, user.sub, parsed.data.events);
     });
 
     // ── AI ANALYSIS RESULT (from Electron renderer) ──────────
-    socket.on(CLIENT_EVENTS.ANALYSIS_RESULT, async (payload) => {
+    socket.on(CLIENT_EVENTS.ANALYSIS_RESULT, async (payload: unknown) => {
       const sessionId = socket.data['sessionId'];
       if (!sessionId) return;
-      await proctoringService.processAnalysisResult(sessionId, examId, payload, io);
+      const parsed = AnalysisResultSchema.safeParse(payload);
+      if (!parsed.success) {
+        socket.emit(SERVER_EVENTS.ERROR, { code: ErrorCode.VALIDATION_ERROR, message: 'Invalid analysis result payload' });
+        return;
+      }
+      await proctoringService.processAnalysisResult(sessionId, examId, parsed.data, io);
     });
 
     // ── HEARTBEAT ─────────────────────────────────────────────
@@ -3259,7 +3884,7 @@ export const examNamespace = {
         await autoSubmitQueue.add(
           'reconnect-timeout',
           { sessionId },
-          { jobId: sessionId, delay: 60_000 },
+          { jobId: `reconnect:${sessionId}`, delay: 60_000 },
         );
 
         io.of('/proctor').to(`exam:${examId}`).emit('session:disconnected', {
@@ -3280,10 +3905,13 @@ export const examNamespace = {
           serverTime:  Date.now(),
         });
         if (remaining <= 0) {
+          // UI sync only — the durable `expiry:${sessionId}` job (§11.1
+          // startSession) is the authoritative trigger. That job's
+          // completion reaches this socket via the `session:auto-submitted`
+          // pub/sub subscriber in server.ts (§13.1), which emits
+          // EXAM_AUTO_SUBMITTED and disconnects. This interval just stops
+          // ticking once the deadline has visibly passed.
           clearInterval(interval);
-          await sessionService.autoSubmit(sessionId);
-          socket.emit(SERVER_EVENTS.EXAM_AUTO_SUBMITTED, { reason: 'TIME_EXPIRED' });
-          socket.disconnect();
         }
       }
     }, 30_000);
@@ -3466,9 +4094,20 @@ export class ProctoringService {
   async reviewFlag(
     flagId: string,
     reviewerId: string,
+    institutionId: string,
     decision: 'NO_ACTION' | 'WARNING_ISSUED' | 'ESCALATED' | 'TERMINATED',
     note?: string,
   ) {
+    // Institution-scoped existence check — ProctoringFlag carries no
+    // institutionId directly; it's reachable only via session → exam.
+    // Without this, any reviewer with `flag:session` permission could
+    // update a flag belonging to another institution's session by guessing
+    // its id.
+    const owned = await db.proctoringFlag.findFirst({
+      where: { id: flagId, session: { exam: { institutionId } } },
+    });
+    if (!owned) throw new AppError(404, 'Flag not found', ErrorCode.NOT_FOUND);
+
     const flag = await db.proctoringFlag.update({
       where: { id: flagId },
       data:  {
@@ -3528,16 +4167,26 @@ import { ErrorCode } from 'shared';
 import { cryptoService } from '../../services/crypto.service.js';
 import { aiGradingService } from '../../services/ai-grading.service.js';
 import { auditService } from '../../services/audit.service.js';
+import { computeChainHash } from '../../lib/hash-chain.js';
 
 export class GradingService {
 
   async gradeObjectiveAnswers(sessionId: string) {
-    const answers = await db.studentAnswer.findMany({
-      where:   { sessionId },
-      include: { question: true },
+    const session = await db.examSession.findUniqueOrThrow({
+      where:  { id: sessionId },
+      select: { examId: true },
     });
 
+    const [answers, examQuestions] = await Promise.all([
+      db.studentAnswer.findMany({ where: { sessionId }, include: { question: true } }),
+      db.examQuestion.findMany({
+        where:   { section: { examId: session.examId } },
+        include: { question: true },
+      }),
+    ]);
+
     const objectiveTypes = ['MCQ', 'MSQ', 'TRUE_FALSE'];
+    const answeredIds = new Set(answers.map(a => a.questionId));
     const objectiveAnswers = answers.filter(a => objectiveTypes.includes(a.question.type));
 
     for (const answer of objectiveAnswers) {
@@ -3555,8 +4204,17 @@ export class GradingService {
         const selected       = Array.isArray(response) ? response : [];
         const correctHits    = selected.filter((id: string) => correctIds.includes(id)).length;
         const wrongHits      = selected.filter((id: string) => !correctIds.includes(id)).length;
-        const rawScore       = ((correctHits - wrongHits) / correctIds.length) * answer.question.marks;
-        score                = Math.max(0, Math.round(rawScore * 100) / 100);
+        // Guard: correctIds.length === 0 would divide by zero → NaN. Should
+        // be unreachable via the API (MSQ requires ≥2 correct options at
+        // create/update time), but grading reads from decrypted stored
+        // options, not the validated request payload — treat a malformed
+        // question defensively as unscorable rather than propagating NaN.
+        if (correctIds.length === 0) {
+          score = 0;
+        } else {
+          const rawScore = ((correctHits - wrongHits) / correctIds.length) * answer.question.marks;
+          score          = Math.max(0, Math.round(rawScore * 100) / 100);
+        }
       }
 
       await db.grade.upsert({
@@ -3572,6 +4230,25 @@ export class GradingService {
       });
     }
 
+    // DB-4: skipped objective questions still count toward maxScore — give
+    // them a zero-score SYSTEM grade instead of leaving no row at all.
+    const skippedObjective = examQuestions.filter(
+      eq => objectiveTypes.includes(eq.question.type) && !answeredIds.has(eq.questionId),
+    );
+    for (const eq of skippedObjective) {
+      await db.grade.upsert({
+        where:  { sessionId_questionId: { sessionId, questionId: eq.questionId } },
+        create: {
+          sessionId,
+          questionId: eq.questionId,
+          score:      0,
+          maxScore:   eq.question.marks,
+          gradedBy:   'SYSTEM',
+        },
+        update: {},
+      });
+    }
+
     await db.examSession.update({
       where: { id: sessionId },
       data:  { status: 'GRADING' },
@@ -3579,12 +4256,21 @@ export class GradingService {
   }
 
   async requestAISuggestions(sessionId: string) {
-    const answers = await db.studentAnswer.findMany({
-      where:   { sessionId },
-      include: { question: true },
+    const session = await db.examSession.findUniqueOrThrow({
+      where:  { id: sessionId },
+      select: { examId: true },
     });
 
+    const [answers, examQuestions] = await Promise.all([
+      db.studentAnswer.findMany({ where: { sessionId }, include: { question: true } }),
+      db.examQuestion.findMany({
+        where:   { section: { examId: session.examId } },
+        include: { question: true },
+      }),
+    ]);
+
     const subjectiveTypes = ['SHORT', 'LONG'];
+    const answeredIds = new Set(answers.map(a => a.questionId));
     const subjectiveAnswers = answers.filter(a => subjectiveTypes.includes(a.question.type));
 
     for (const answer of subjectiveAnswers) {
@@ -3620,6 +4306,26 @@ export class GradingService {
           confirmedAt:     null,
           confirmedBy:     null,
         },
+      });
+    }
+
+    // DB-4: skipped subjective questions still need a Grade row so
+    // publishResults' "still needing confirmation" check catches them —
+    // zero score, unconfirmed, teacher must explicitly confirm before publish.
+    const skippedSubjective = examQuestions.filter(
+      eq => subjectiveTypes.includes(eq.question.type) && !answeredIds.has(eq.questionId),
+    );
+    for (const eq of skippedSubjective) {
+      await db.grade.upsert({
+        where:  { sessionId_questionId: { sessionId, questionId: eq.questionId } },
+        create: {
+          sessionId,
+          questionId: eq.questionId,
+          score:      0,
+          maxScore:   eq.question.marks,
+          gradedBy:   'SYSTEM',
+        },
+        update: {},
       });
     }
   }
@@ -3663,6 +4369,24 @@ export class GradingService {
       );
     }
 
+    // Hash chain scoped to this (sessionId, questionId) pair — each entry
+    // records the grade state just before it was overwritten (DB-2).
+    const prevGradeHistory = await db.gradeHistory.findFirst({
+      where:   { sessionId, questionId },
+      orderBy: { createdAt: 'desc' },
+      select:  { recordHash: true },
+    });
+    const prevHash    = prevGradeHistory?.recordHash ?? null;
+    const createdAt   = new Date();
+    const recordHash  = computeChainHash({
+      sessionId, questionId,
+      score:    grade.score,
+      gradedBy: grade.gradedBy,
+      note:     grade.teacherNote,
+      prevHash,
+      createdAt: createdAt.toISOString(),
+    });
+
     await db.gradeHistory.create({
       data: {
         sessionId,
@@ -3670,6 +4394,9 @@ export class GradingService {
         score:    grade.score,
         gradedBy: grade.gradedBy,
         note:     grade.teacherNote,
+        prevHash,
+        recordHash,
+        createdAt,
       },
     });
 
@@ -3766,11 +4493,13 @@ const connection = {
 
 export const gradingQueue    = new Queue('grading',    { connection });
 export const telemetryQueue  = new Queue('telemetry',  { connection });
-export const sanitizeQueue   = new Queue('sanitize',   { connection });
 export const reportQueue     = new Queue('reports',    { connection });
 
-// Redis-backed delayed job replacing the old in-process
-// setTimeout for reconnect-window auto-submit. 
+// Redis-backed delayed jobs for session finalization. Two independent
+// job families share this queue, distinguished by jobId prefix so they
+// can't collide or silently overwrite one another:
+//   reconnect:<sessionId> — reconnect-window timeout (§13.2 disconnect)
+//   expiry:<sessionId>    — exam duration elapsed (§11.1 startSession)
 export const autoSubmitQueue = new Queue('auto-submit', { connection });
 ```
 
@@ -3786,16 +4515,22 @@ import { logger } from '../../utils/logger.js';
 // job with the same id after a fresh disconnect simply replaces the
 // existing delayed job rather than stacking a second one.
 export const autoSubmitWorker = new Worker('auto-submit', async (job) => {
-  const { sessionId } = job.data as { sessionId: string };
-  logger.warn({ sessionId }, 'Reconnect window expired — auto-submitting');
-  await sessionService.autoSubmit(sessionId);
+  const { sessionId, reason } = job.data as { sessionId: string; reason: 'RECONNECT_TIMEOUT' | 'TIME_EXPIRED' };
+  logger.warn({ sessionId, reason }, 'Durable auto-submit job fired');
+  const result = await sessionService.autoSubmit(sessionId);
+
+  // autoSubmit() no-ops (returns null) if the session was already
+  // finalized by another path (voluntary submit, risk threshold, or the
+  // other job family) — nothing to notify in that case.
+  if (!result) return { sessionId, skipped: true };
 
   // Worker processes don't hold a live Socket.IO server reference, so we
   // publish over Redis pub/sub; the WS gateway process(es) subscribe to
-  // this channel and re-broadcast to the relevant proctor room. 
+  // this channel and re-broadcast to both the student's own session room
+  // and the relevant proctor room.
   const { redis } = await import('../../config/redis.js');
-  await redis.publish('proctor:session-auto-submitted', JSON.stringify({
-    sessionId, reason: 'RECONNECT_TIMEOUT',
+  await redis.publish('session:auto-submitted', JSON.stringify({
+    sessionId, examId: result.examId, reason,
   }));
 
   return { sessionId, submittedAt: new Date().toISOString() };
@@ -3839,44 +4574,6 @@ export const gradingWorker = new Worker('grading', async (job) => {
 
 gradingWorker.on('failed', (job, err) => {
   logger.error({ jobId: job?.id, err }, 'Grading job failed');
-});
-```
-
-### 16.3 Log Sanitization Worker
-
-```typescript
-// packages/backend/src/jobs/workers/sanitize.worker.ts
-import { Worker } from 'bullmq';
-import { db } from '../../db/client.js';
-import { logger } from '../../utils/logger.js';
-
-const PII_PATTERNS = [
-  // Mask last octet of IPv4
-  { pattern: /(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}/g, replace: '$1.***' },
-  // Mask last 4 chars of any email local part
-  { pattern: /([a-zA-Z0-9._%+-]{2})[a-zA-Z0-9._%+-]+(@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, replace: '$1****$2' },
-];
-
-export const sanitizeWorker = new Worker('sanitize', async (job) => {
-  const { sessionId } = job.data as { sessionId: string };
-
-  const logs = await db.auditLog.findMany({
-    where: { metadata: { path: ['sessionId'], equals: sessionId } },
-  });
-
-  for (const log of logs) {
-    let sanitized = JSON.stringify(log.metadata);
-    for (const { pattern, replace } of PII_PATTERNS) {
-      sanitized = sanitized.replace(pattern, replace);
-    }
-
-    await db.auditLog.update({
-      where: { id: log.id },
-      data:  { metadata: JSON.parse(sanitized) },
-    });
-  }
-
-  logger.info({ sessionId, count: logs.length }, 'Log sanitization complete');
 });
 ```
 
@@ -3968,10 +4665,23 @@ export const cryptoService = new CryptoService();
 ## 18. Audit Log Service
 
 ```typescript
-// packages/backend/src/services/audit.service.ts
+// packages/backend/src/lib/hash-chain.ts
 import crypto from 'crypto';
+
+// Shared SHA-256 hash-chaining primitive (SEC-7 / DB-2). Canonicalizes a
+// JSON-serializable payload — callers must include `prevHash` in the
+// payload themselves so each record's hash depends on the one before it.
+export function computeChainHash(payload: object): string {
+  return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+```
+
+```typescript
+// packages/backend/src/services/audit.service.ts
+import type { Prisma } from '@prisma/client';
 import { db } from '../db/client.js';
 import { logger } from '../utils/logger.js';
+import { computeChainHash } from '../lib/hash-chain.js';
 
 interface AuditEntry {
   institutionId?: string;
@@ -3989,24 +4699,103 @@ export class AuditService {
   // Redis key for last hash (for quick chain building)
   private lastHashKey = 'audit:last_hash';
 
+  // Fixed advisory-lock key serializing every audit-chain append so the
+  // prevHash-read + insert below is atomic and the chain can't fork under
+  // concurrent traffic (IMP-2). The value is arbitrary — any consistent
+  // 64-bit int works, it carries no other meaning.
+  private static readonly CHAIN_LOCK_KEY = 847_291_003n;
+
+  // Fixed key order + explicit nulls, so log() and verifyChain() always hash
+  // an identical shape regardless of which optional fields a caller passed
+  // (IMP-1).
+  private canonicalPayload(record: {
+    institutionId: string | null;
+    actorId:       string | null;
+    actorRole:     string | null;
+    action:        string;
+    resourceType:  string;
+    resourceId:    string | null;
+    metadata:      object;
+    ipAddress:     string | null;
+    userAgent:     string | null;
+    prevHash:      string | null;
+    timestamp:     string;
+  }): object {
+    return {
+      institutionId: record.institutionId,
+      actorId:       record.actorId,
+      actorRole:     record.actorRole,
+      action:        record.action,
+      resourceType:  record.resourceType,
+      resourceId:    record.resourceId,
+      metadata:      record.metadata,
+      ipAddress:     record.ipAddress,
+      userAgent:     record.userAgent,
+      prevHash:      record.prevHash,
+      timestamp:     record.timestamp,
+    };
+  }
+
+  private static readonly PII_PATTERNS = [
+    // Mask last octet of IPv4
+    { pattern: /(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}/g, replace: '$1.***' },
+    // Mask last 4 chars of any email local part
+    { pattern: /([a-zA-Z0-9._%+-]{2})[a-zA-Z0-9._%+-]+(@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, replace: '$1****$2' },
+  ];
+
+  // Masks PII in a projection of stored metadata — the AuditLog row itself
+  // is never touched (SEC-7): mutating it would change recordHash and make
+  // verifyChain() report every sanitized record as tampered.
+  getMetadataForViewer(metadata: object, viewerIsAdmin: boolean): object {
+    if (viewerIsAdmin) return metadata;
+
+    let sanitized = JSON.stringify(metadata);
+    for (const { pattern, replace } of AuditService.PII_PATTERNS) {
+      sanitized = sanitized.replace(pattern, replace);
+    }
+    return JSON.parse(sanitized);
+  }
+
   async log(entry: AuditEntry): Promise<void> {
-    // Build hash-chained record
-    const prevHash  = await this.getLastHash();
-    const payload   = JSON.stringify({ ...entry, prevHash, timestamp: new Date().toISOString() });
-    const recordHash = crypto.createHash('sha256').update(payload).digest('hex');
+    const metadata  = entry.metadata ?? {};
 
-    await db.auditLog.create({
-      data: {
-        ...entry,
-        metadata:    entry.metadata ?? {},
+    await db.$transaction(async (tx) => {
+      // Blocks until any other in-flight append commits — everything below
+      // is only safe because nothing else can be inside this section
+      // concurrently (IMP-2).
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${AuditService.CHAIN_LOCK_KEY})`;
+
+      const prevHash  = await this.getLastHash(tx);
+      const timestamp = new Date();
+      const recordHash = computeChainHash(this.canonicalPayload({
+        institutionId: entry.institutionId ?? null,
+        actorId:       entry.actorId ?? null,
+        actorRole:     entry.actorRole ?? null,
+        action:        entry.action,
+        resourceType:  entry.resourceType,
+        resourceId:    entry.resourceId ?? null,
+        metadata,
+        ipAddress:     entry.ipAddress ?? null,
+        userAgent:     entry.userAgent ?? null,
         prevHash,
-        recordHash,
-        timestamp:   new Date(),
-      },
-    });
+        timestamp:     timestamp.toISOString(),
+      }));
 
-    // Update last hash in cache (best-effort — rebuilds from DB on miss)
-    await this.setLastHash(recordHash);
+      await tx.auditLog.create({
+        data: {
+          ...entry,
+          metadata,
+          prevHash,
+          recordHash,
+          timestamp,
+        },
+      });
+
+      // Written before this transaction commits (and so before the
+      // advisory lock releases) — the next writer's Redis read below is
+      // guaranteed fresh, never stale (IMP-2).
+      await this.setLastHash(recordHash);
+    });
   }
 
   async logSecurityEvent(event: string, metadata: object): Promise<void> {
@@ -4018,14 +4807,40 @@ export class AuditService {
     });
   }
 
+  // High-volume, attacker-controllable events (invalid JWTs, rate-limit
+  // hits, permission denials) do NOT go through the hash-chained
+  // AuditService.log() path (REL-3). An unauthenticated flood of these
+  // would both bloat the immutable chain and contend on its serializing
+  // advisory lock (IMP-2), degrading latency for legitimate requests — a
+  // self-inflicted DoS amplifier. Per HLD §18.1's Three Pillars, these
+  // belong to the "structured logs" pillar (operational, prunable), not
+  // the "audit trail" pillar (tamper-evident, consequential actions only).
+  //
+  // Written as a structured log line (queryable via the log aggregator)
+  // plus a per-minute Redis counter for spike detection — no DB write,
+  // no chain contention, no per-event row growth.
+  async logOperationalSecurityEvent(event: string, metadata: object): Promise<void> {
+    logger.warn({ event, ...metadata, tier: 'operational' }, 'Security event (operational)');
+
+    const { redis } = await import('../config/redis.js');
+    const bucket = Math.floor(Date.now() / 60_000); // 1-minute buckets
+    const key = `sec_event_count:${event}:${bucket}`;
+    await redis.incr(key);
+    await redis.expire(key, 3600); // buckets retained 1h for alerting/dashboards
+  }
+
   // Verify the entire audit log chain integrity
-  async verifyChain(institutionId?: string): Promise<{
+  async verifyChain(): Promise<{
     valid: boolean;
     totalRecords: number;
     brokenAt?: string;
   }> {
+    // Global chain only (IMP-3) — many records (pre-auth security events)
+    // have no institutionId, but their recordHash is still a prevHash link
+    // for later records, so a scoped subset can never verify cleanly.
+    // Per-institution *display* filtering happens separately, at the
+    // query that builds the report's auditTrail, not here.
     const logs = await db.auditLog.findMany({
-      where:   institutionId ? { institutionId } : {},
       orderBy: { timestamp: 'asc' },
     });
 
@@ -4033,20 +4848,19 @@ export class AuditService {
       const log  = logs[i]!;
       const prev = logs[i - 1];
 
-      const expectedPayload = JSON.stringify({
+      const expectedHash = computeChainHash(this.canonicalPayload({
         institutionId: log.institutionId,
         actorId:       log.actorId,
         actorRole:     log.actorRole,
         action:        log.action,
         resourceType:  log.resourceType,
         resourceId:    log.resourceId,
-        metadata:      log.metadata,
+        metadata:      log.metadata as object,
         ipAddress:     log.ipAddress,
         userAgent:     log.userAgent,
         prevHash:      prev?.recordHash ?? null,
         timestamp:     log.timestamp.toISOString(),
-      });
-      const expectedHash = crypto.createHash('sha256').update(expectedPayload).digest('hex');
+      }));
 
       if (expectedHash !== log.recordHash) {
         return { valid: false, totalRecords: logs.length, brokenAt: log.id };
@@ -4056,12 +4870,13 @@ export class AuditService {
     return { valid: true, totalRecords: logs.length };
   }
 
-  private async getLastHash(): Promise<string | null> {
+  private async getLastHash(tx: Prisma.TransactionClient = db): Promise<string | null> {
     const { redis } = await import('../config/redis.js');
     const cached = await redis.get(this.lastHashKey);
     if (cached) return cached;
-    // Fallback: query DB
-    const last = await db.auditLog.findFirst({ orderBy: { timestamp: 'desc' }, select: { recordHash: true } });
+    // Fallback: query DB, inside the same locked transaction so the read
+    // can't race a concurrent commit.
+    const last = await tx.auditLog.findFirst({ orderBy: { timestamp: 'desc' }, select: { recordHash: true } });
     return last?.recordHash ?? null;
   }
 
@@ -4313,27 +5128,31 @@ packages/electron/src/
 │   ├── display-manager.ts    # Monitor count enforcement
 │   ├── heartbeat.ts          # WebSocket heartbeat + session health
 │   ├── updater.ts            # Auto-update logic
+│   ├── attestation.ts        # Signs attestation tokens proving this is the real client
 │   └── ipc/
-│       ├── auth.ipc.ts       # IPC handlers for auth flows
-│       ├── device.ipc.ts     # IPC handlers for device registration
-│       ├── exam.ipc.ts       # IPC handlers for exam operations
-│       └── proctor.ipc.ts    # IPC handlers for proctoring data
-├── preload/
-│   └── index.ts              # contextBridge — the ONLY bridge between main & renderer
-└── renderer/                 # React app (exam UI)
-    ├── components/
-    │   ├── ExamLayout.tsx
-    │   ├── QuestionRenderer.tsx
-    │   ├── AnswerInput.tsx
-    │   ├── Timer.tsx
-    │   ├── SecurityGateFlow.tsx
-    │   └── CameraCapture.tsx
-    ├── hooks/
-    │   ├── useExamSession.ts
-    │   ├── useFaceDetection.ts
-    │   └── useTelemetry.ts
-    └── store/
-        └── exam.store.ts
+│       ├── device.ipc.ts     # IPC handlers for device fingerprint/gates/camera
+│       └── attestation.ipc.ts # IPC handler for attestation token generation
+│                              # FIX (hybrid architecture, Option A): auth.ipc.ts,
+│                              # exam.ipc.ts, proctor.ipc.ts removed — under
+│                              # Option A the renderer (packages/web) owns its
+│                              # own WebSocket/HTTP connection to the backend
+│                              # directly, identical to the pure-web path. Main
+│                              # process only handles things that genuinely
+│                              # require native access.
+└── preload/
+    └── index.ts              # contextBridge — exposes ONLY getAttestationToken()
+                               # to the remotely-loaded renderer. No bundled
+                               # renderer/ — the exam UI is the same web app
+                               # (packages/web), loaded via win.loadURL, not a
+                               # separate compiled React app. See 20.2/20.x for
+                               # why this is safe: the native lockdown modules
+                               # above (lockdown.ts, process-scanner.ts,
+                               # display-manager.ts, device.ts) are unaffected —
+                               # they run in the main process regardless of
+                               # where the renderer's HTML comes from. Safety
+                               # depends entirely on attestation.ts +
+                               # server-side verification (20.x), not on the
+                               # renderer being locally bundled.
 ```
 
 ### 20.2 Main Process — Window Creation
@@ -4345,24 +5164,45 @@ import path from 'path';
 import { LockdownManager } from './lockdown.js';
 import { setupIpcHandlers } from './ipc/index.js';
 import { updater } from './updater.js';
+import { env } from './config.js';   // WEB_ORIGIN
+
+// FIX (command-line switch exploit): some switches (remote-debugging-port
+// etc.) are consumed by Chromium before app code runs — this catches the
+// common case, not a guarantee. Real backstop is server-side attestation
+// (§20.x): a tampered client still can't get a session without it.
+const DANGEROUS_SWITCHES = ['disable-web-security', 'remote-debugging-port', 'remote-debugging-address', 'inspect', 'inspect-brk'];
+if (process.argv.some(arg => DANGEROUS_SWITCHES.some(sw => arg.includes(`--${sw}`)))) {
+  app.quit();
+  process.exit(1);
+}
 
 const lockdown = new LockdownManager();
 
+// FIX (hybrid architecture): loads packages/web via a dedicated route, not
+// a bundled renderer. That route's bundle must never import teacher/admin/
+// proctor router modules (build-config requirement, not enforceable here).
+const EXAM_CLIENT_ROUTE = `${env.WEB_ORIGIN}/electron/session-entry`;
+const ALLOWED_PREFIX     = `${env.WEB_ORIGIN}/electron/`;
+
 async function createWindow(): Promise<BrowserWindow> {
-  // Strict CSP for renderer
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+  // FIX (harm reduction, no subdomain): isolated cookie/storage jar from
+  // any regular browser session on the domain. Does not isolate against
+  // XSS injected into /electron/*'s own code — that needs the deferred
+  // subdomain migration; tracked as accepted residual risk.
+  const examSession = session.fromPartition('persist:examclient');
+
+  // FIX (wrong session target bug): must attach to examSession, not
+  // defaultSession — the window uses examSession, so an interceptor
+  // anywhere else silently never fires. FIX (dead nonce bug): CSP nonce
+  // must be server-owned (packages/web's /electron/* route sets it and
+  // matches it in rendered <script> tags) — Electron can't know the
+  // server's value, so it only adds Trusted Types here, nothing nonce-based.
+  examSession.webRequest.onHeadersReceived((details, callback) => {
+    const existing = details.responseHeaders?.['Content-Security-Policy']?.[0] ?? "default-src 'none'";
     callback({
       responseHeaders: {
         ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'none'; " +
-          "script-src 'self'; " +
-          "connect-src 'self' wss://api.examplatform.com; " +
-          "img-src 'self' data: blob:; " +
-          "style-src 'self'; " +
-          "media-src 'self' blob:; " +  // webcam
-          "frame-ancestors 'none';"
-        ],
+        'Content-Security-Policy': [`${existing}; require-trusted-types-for 'script';`],
       },
     });
   });
@@ -4382,29 +5222,66 @@ async function createWindow(): Promise<BrowserWindow> {
       sandbox:                     true,    // Extra renderer isolation
       webSecurity:                 true,
       allowRunningInsecureContent: false,
+      session:                     examSession,
+      // FIX (DevTools timing attack): disable the capability, don't react
+      // to it opening 
+      devTools:                    process.env['NODE_ENV'] === 'development',
       preload:                     path.join(__dirname, '../preload/index.js'),
     },
   });
 
-  // In production: load bundled file; in dev: load Vite dev server
+  // FIX (hybrid architecture): always load the remote route; dev/prod
+  // differ only in which origin env.WEB_ORIGIN points to.
+  await win.loadURL(EXAM_CLIENT_ROUTE);
   if (process.env['NODE_ENV'] === 'development') {
-    await win.loadURL('http://localhost:5173');
-    win.webContents.openDevTools();
-  } else {
-    await win.loadFile(path.join(__dirname, '../renderer/index.html'));
-    // Disable DevTools entirely in production
-    win.webContents.on('devtools-opened', () => win.webContents.closeDevTools());
+    win.webContents.openDevTools();   // safe: devTools:true only in dev
   }
 
-  // Prevent navigation away from the exam app
+  // FIX (hybrid architecture, Option A): main process has no connection of
+  // its own to the backend — natively-detected violations reach it only by
+  // being pushed to the renderer, which forwards over its own already-open
+  // WS connection. setViolationReporter existed but was never wired to
+  // anything; this is that wiring.
+  lockdown.setViolationReporter((type, data) => {
+    win.webContents.send('violation:native', { type, data });
+  });
+
+  // FIX (redirect gap): will-redirect is a separate event from
+  // will-navigate — an HTTP 30x could navigate externally without ever
+  // firing will-navigate. Both pinned to the same allowlist.
   win.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith('http://localhost') && !url.startsWith('file://')) {
+    if (!url.startsWith(ALLOWED_PREFIX)) {
+      event.preventDefault();
+    }
+  });
+  win.webContents.on('will-redirect', (event, url) => {
+    if (!url.startsWith(ALLOWED_PREFIX)) {
       event.preventDefault();
     }
   });
 
-  // Prevent opening new windows
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // FIX (SPA router bypass): will-navigate misses history.pushState — DOM
+  // has already changed by the time this fires, so it's a backstop, not
+  // prevention (real prevention is the code-split bundle noted above).
+  // Reports the attempt as a risk event, same as any other proctoring signal.
+  win.webContents.on('did-navigate-in-page', (event, url) => {
+    if (!url.startsWith(ALLOWED_PREFIX)) {
+      lockdown.report('SPA_ROUTE_ESCAPE_ATTEMPT', { url });
+      win.loadURL(EXAM_CLIENT_ROUTE);
+    }
+  });
+
+  // FIX (context menu escape route): Electron's built-in spellcheck menu
+  // offers Save As/Print on editable fields with nothing wired up — must
+  // be blocked unconditionally, not safe by omission.
+  win.webContents.on('context-menu', (event) => event.preventDefault());
+
+  // Prevent opening new windows — now logged: an attempted window.open()
+  // in a locked-down exam window is itself a suspicious signal.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    lockdown.report('WINDOW_OPEN_ATTEMPT', { url });
+    return { action: 'deny' };
+  });
 
   setupIpcHandlers(win);
   return win;
@@ -4439,6 +5316,13 @@ export class LockdownManager {
 
   setViolationReporter(fn: (type: string, data: object) => void) {
     this.reportViolation = fn;
+  }
+
+  // Public entry point for callers outside this class (e.g. main/index.ts's
+  // navigation/window-open guards) — reportViolation itself stays private;
+  // external code was never meant to reach into the field directly.
+  report(type: string, data: object) {
+    this.reportViolation?.(type, data);
   }
 
   async enable(win: BrowserWindow) {
@@ -4537,6 +5421,48 @@ export class LockdownManager {
 }
 ```
 
+### 20.3a Client Attestation
+
+```typescript
+// packages/electron/src/main/attestation.ts
+import crypto from 'crypto';
+import { app } from 'electron';
+import { env } from './config.js';
+
+// Signs a short-lived token proving a request came from the genuine
+// Electron binary, not a scripted client hitting the API directly.
+// ATTESTATION_HMAC_SECRET is embedded at build time (baked into the
+// signed binary), same rationale as ENTRY_TOKEN_HMAC_SECRET (L1) — never
+// transmitted on its own, only used to compute a verifiable signature.
+// Honest limit: a client-embedded secret can be extracted by a determined
+// reverse-engineer (no hardware-backed enclave here) — this raises the
+// bar past casual scripting, it doesn't make bypass impossible. Real
+// defense-in-depth is the AI proctoring layer (FR-031-038) that keeps
+// watching regardless of what the local client claims.
+export function generateAttestationToken(deviceId: string): string {
+  const payload = JSON.stringify({ deviceId, timestamp: Date.now(), appVersion: app.getVersion() });
+  const signature = crypto
+    .createHmac('sha256', Buffer.from(env.ATTESTATION_HMAC_SECRET, 'hex'))
+    .update(payload)
+    .digest('hex');
+  return `${Buffer.from(payload).toString('base64url')}.${signature}`;
+}
+```
+
+```typescript
+// packages/electron/src/main/ipc/attestation.ipc.ts
+import { ipcMain } from 'electron';
+import { generateAttestationToken } from '../attestation.js';
+import { getDeviceFingerprint } from '../device.js';
+
+export function registerAttestationHandlers() {
+  ipcMain.handle('attestation:get-token', async () => {
+    const deviceId = await getDeviceFingerprint();
+    return generateAttestationToken(deviceId);
+  });
+}
+```
+
 ### 20.4 Preload Script — contextBridge
 
 ```typescript
@@ -4547,52 +5473,52 @@ import { contextBridge, ipcRenderer } from 'electron';
 // interact with the main process. Nothing else is exposed.
 // The renderer has zero access to Node.js, Electron, or OS APIs.
 
+// FIX (drag-and-drop cheat notes): default Electron behavior lets a
+// dropped local file (text/HTML cheat sheet) trigger a navigation. Runs
+// here, not in the remote page's own JS, so it can't be skipped by
+// whatever ships in that bundle.
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => e.preventDefault());
+
+// FIX (hybrid architecture, Option A): the renderer is the same web app
+// (packages/web) and owns its own WebSocket connection to the backend
+// directly — JOIN, SUBMIT_ANSWER, SUBMIT_EXAM, ANALYSIS_RESULT, and all
+// server→client events (timer sync, proctor actions, exam terminated) are
+// plain socket.io-client calls in that page's own code, identical to the
+// pure-web path. examBridge exposes ONLY what genuinely requires native
+// access — nothing here proxies backend traffic; that would mean
+// reimplementing WebSocket relaying in the main process for no benefit,
+// since the renderer can already reach the backend on its own.
 contextBridge.exposeInMainWorld('examBridge', {
-  // ── Device & Gates ───────────────────────────────────────
+  // FIX (app verification / spoofed-browser access): the remote page calls
+  // this and attaches the result as a header on entry-gate/session-start
+  // requests it makes over its own connection. Only a request carrying a
+  // valid token passes server-side verification (§11/§12) — a plain
+  // browser hitting the same URL has no way to obtain one, since this only
+  // exists behind the contextBridge.
+  getAttestationToken: () =>
+    ipcRenderer.invoke('attestation:get-token'),
+
+  // ── Native-only capabilities ──────────────────────────────
   getDeviceFingerprint: () =>
     ipcRenderer.invoke('device:get-fingerprint'),
 
   runSecurityGates: (examId: string) =>
     ipcRenderer.invoke('device:run-gates', { examId }),
 
-  // ── Camera ───────────────────────────────────────────────
   getCameraDevices: () =>
     ipcRenderer.invoke('camera:get-devices'),
 
-  // ── Exam Session ─────────────────────────────────────────
-  joinExamSession: (entryToken: string, deviceId: string) =>
-    ipcRenderer.invoke('exam:join', { entryToken, deviceId }),
-
-  submitAnswer: (payload: { questionId: string; sessionId: string; response: unknown; timeSpentMs: number }) =>
-    ipcRenderer.invoke('exam:submit-answer', payload),
-
-  submitExam: (sessionId: string) =>
-    ipcRenderer.invoke('exam:submit', { sessionId }),
-
-  // ── Proctoring ───────────────────────────────────────────
-  reportAnalysis: (result: {
-    faceDetected: boolean;
-    multipleFaces: boolean;
-    gazeOffScreen: boolean;
-    confidence: number;
-    sessionId: string;
-  }) => ipcRenderer.invoke('proctor:report-analysis', result),
-
-  reportViolation: (type: string, metadata: object) =>
-    ipcRenderer.invoke('proctor:report-violation', { type, metadata }),
-
-  // ── Server events → renderer ─────────────────────────────
-  onTimerSync: (cb: (data: { remainingMs: number }) => void) => {
-    ipcRenderer.on('timer:sync', (_e, data) => cb(data));
-    return () => ipcRenderer.removeAllListeners('timer:sync');
-  },
-  onProctoringAction: (cb: (action: { type: string; message?: string }) => void) => {
-    ipcRenderer.on('proctor:action', (_e, action) => cb(action));
-    return () => ipcRenderer.removeAllListeners('proctor:action');
-  },
-  onExamTerminated: (cb: (reason: string) => void) => {
-    ipcRenderer.on('exam:terminated', (_e, reason) => cb(reason));
-    return () => ipcRenderer.removeAllListeners('exam:terminated');
+  // FIX (hybrid architecture, Option A): violations detected IN the main
+  // process (forbidden process, keyboard shortcut, SPA route escape,
+  // window.open attempt — see lockdown.ts and main/index.ts) have no way
+  // to reach the backend on their own; main process doesn't hold a
+  // connection to it. This is the relay: main pushes the event here, the
+  // renderer forwards it over its own already-open WS connection
+  // (VIOLATION_REPORT), the same way it reports anything else.
+  onNativeViolation: (cb: (violation: { type: string; data: object }) => void) => {
+    ipcRenderer.on('violation:native', (_e, violation) => cb(violation));
+    return () => ipcRenderer.removeAllListeners('violation:native');
   },
 });
 
@@ -4604,89 +5530,9 @@ declare global {
 }
 ```
 
-### 20.5 Renderer — Face Detection Hook
+### 20.5 Face Detection Hook
 
-```typescript
-// packages/electron/src/renderer/hooks/useFaceDetection.ts
-import { useEffect, useRef, useCallback } from 'react';
-import * as faceapi from 'face-api.js';
-
-interface FaceAnalysis {
-  faceDetected:  boolean;
-  multipleFaces: boolean;
-  gazeOffScreen: boolean;
-  confidence:    number;
-}
-
-export function useFaceDetection(
-  videoRef: React.RefObject<HTMLVideoElement>,
-  sessionId: string,
-  enabled: boolean,
-) {
-  const intervalRef  = useRef<NodeJS.Timeout>();
-  const modelsLoaded = useRef(false);
-
-  useEffect(() => {
-    if (!enabled) return;
-
-    const loadModels = async () => {
-      if (modelsLoaded.current) return;
-      // Models bundled with the Electron app, loaded from local file system
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri('/models'),
-        faceapi.nets.faceLandmark68TinyNet.loadFromUri('/models'),
-      ]);
-      modelsLoaded.current = true;
-    };
-
-    const analyze = async () => {
-      if (!videoRef.current || !modelsLoaded.current) return;
-
-      const detections = await faceapi
-        .detectAllFaces(videoRef.current, new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 }))
-        .withFaceLandmarks(true);
-
-      const faceDetected  = detections.length > 0;
-      const multipleFaces = detections.length > 1;
-      let gazeOffScreen   = false;
-      let confidence      = 0;
-
-      if (detections.length === 1) {
-        const detection = detections[0]!;
-        confidence      = detection.detection.score;
-
-        // Gaze estimation: use eye landmark positions relative to face box
-        const landmarks = detection.landmarks;
-        const leftEye   = landmarks.getLeftEye();
-        const rightEye  = landmarks.getRightEye();
-        const faceBox   = detection.detection.box;
-
-        // Simple gaze: if eye centers are near the face box edges, gaze is off
-        const eyeCenterX = (
-          leftEye.reduce((s, p) => s + p.x, 0) / leftEye.length +
-          rightEye.reduce((s, p) => s + p.x, 0) / rightEye.length
-        ) / 2;
-
-        const normalizedX = (eyeCenterX - faceBox.left) / faceBox.width;
-        gazeOffScreen = normalizedX < 0.2 || normalizedX > 0.8;
-      }
-
-      const analysis: FaceAnalysis = { faceDetected, multipleFaces, gazeOffScreen, confidence };
-
-      // Send to main process via contextBridge (never directly to server from renderer)
-      await window.examBridge.reportAnalysis({ ...analysis, sessionId });
-    };
-
-    loadModels().then(() => {
-      intervalRef.current = setInterval(analyze, 3_000); // every 3 seconds
-    });
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [enabled, sessionId]);
-}
-```
+FIX (hybrid architecture): this hook now lives in `packages/web/src/routes/electron/hooks/useFaceDetection.ts`, not in this package — there is no local `renderer/` anymore (§20.1). Logic is unchanged; only its location moved, since the exam UI it belongs to is the remote page loaded via §20.2, not a bundled Electron build. See `packages/web`'s own module docs for the current version of this hook.
 
 ### 20.6 Process Scanner
 
@@ -4813,13 +5659,15 @@ Complete reference of every REST API endpoint. All routes are prefixed with `/v1
 
 ### 22.1 Auth Endpoints
 
-| Method | Path             | Auth   | Permission | Body Schema      | Description                                  |
-| ------ | ---------------- | ------ | ---------- | ---------------- | -------------------------------------------- |
-| POST   | `/auth/register` | None   | —          | `RegisterSchema` | Create new user account                      |
-| POST   | `/auth/login`    | None   | —          | `LoginSchema`    | Login, receive access token + refresh cookie |
-| POST   | `/auth/refresh`  | Cookie | —          | —                | Rotate refresh token, get new access token   |
-| POST   | `/auth/logout`   | Bearer | —          | —                | Revoke refresh token family                  |
-| GET    | `/auth/me`       | Bearer | —          | —                | Get current user profile                     |
+| Method | Path                   | Auth   | Permission                              | Body Schema             | Description                                                   |
+| ------ | ---------------------- | ------ | ---------------------------------------- | ------------------------ | -------------------------------------------------------------- |
+| POST   | `/auth/register`       | None   | —                                        | `PublicRegisterSchema`  | Self-register a STUDENT account                               |
+| POST   | `/auth/register-staff` | Bearer | `manage:teachers` or `manage:students`   | `StaffRegisterSchema`   | Admin creates a staff/student account (own institution only)  |
+| POST   | `/auth/verify-email`   | None   | —                                         | `VerifyEmailSchema`     | Verify email via token from verification email                |
+| POST   | `/auth/login`          | None   | —                                        | `LoginSchema`           | Login, receive access token + refresh cookie                  |
+| POST   | `/auth/refresh`        | Cookie | —                                        | —                        | Rotate refresh token, get new access token                     |
+| POST   | `/auth/logout`         | Bearer | —                                        | —                        | Revoke refresh token family                                    |
+| GET    | `/auth/me`             | Bearer | —                                        | —                        | Get current user profile                                       |
 
 ### 22.2 Institution Endpoints
 
@@ -5055,9 +5903,9 @@ Permissions-Policy: camera=(), microphone=(), geolocation=()
 
 ### 25.2 CSRF Defense Detail
 
-All state-mutating API calls require the `X-Requested-With: XMLHttpRequest` header. Since cross-origin `fetch` and `XmlHttpRequest` with this custom header trigger a CORS preflight that the browser enforces, a forged request from another origin cannot include it without the server's explicit CORS permission.
+All Bearer-authenticated, state-mutating API calls require the `X-Requested-With: XMLHttpRequest` header. Since cross-origin `fetch` and `XMLHttpRequest` with this custom header trigger a CORS preflight that the browser enforces, a forged request from another origin cannot include it without the server's explicit CORS permission — this defense relies on the caller having to read the access token via JS and attach it itself, which a cross-origin page cannot do.
 
-The refresh token endpoint additionally uses a double-submit cookie pattern: the cookie value is signed (signed cookie via `cookie-parser`) and verified server-side.
+This header-based defense does not apply to `/auth/refresh`: that endpoint is authenticated purely by an HttpOnly cookie, which the browser attaches automatically even to a plain cross-origin HTML form submission — a "simple request" that never triggers a CORS preflight and never requires a custom header. The web client happens to send `X-Requested-With` on every request, including this one (§19.2's axios instance sets it as a default header) — but that reflects the legitimate client's own behavior, not a constraint the server places on incoming requests. The signed double-submit cookie (cookie value signed via `cookie-parser`, verified server-side) is the only real CSRF control on this route.
 
 ### 25.3 Input Sanitization Pipeline
 
@@ -5326,6 +6174,7 @@ export interface IntegrityReport {
     noForbiddenProcesses: boolean;
     displayCountOk:      boolean;
     ipReputationOk:      boolean;
+    ipReputationUnknown: boolean;
   };
   proctoring: {
     tier:         string;
@@ -5372,11 +6221,12 @@ export interface IntegrityReport {
 export class IntegrityReportService {
 
   async generate(sessionId: string, requesterId: string): Promise<IntegrityReport> {
-    const [session, flags, telemetry, grades, auditLogs] = await Promise.all([
-      db.examSession.findUniqueOrThrow({
-        where:   { id: sessionId },
-        include: { exam: true, student: true },
-      }),
+    const session = await db.examSession.findUniqueOrThrow({
+      where:   { id: sessionId },
+      include: { exam: true, student: true },
+    });
+
+    const [flags, telemetry, grades, auditLogs] = await Promise.all([
       db.proctoringFlag.findMany({
         where:   { sessionId },
         orderBy: { flaggedAt: 'asc' },
@@ -5389,13 +6239,24 @@ export class IntegrityReportService {
         include: { question: true },
       }),
       db.auditLog.findMany({
-        where:   { metadata: { path: ['sessionId'], equals: sessionId } },
+        where: {
+          OR: [
+            { metadata: { path: ['sessionId'], equals: sessionId } },
+            {
+              action: 'IP_INTEL_UNKNOWN',
+              AND: [
+                { metadata: { path: ['examId'],    equals: session.examId } },
+                { metadata: { path: ['studentId'], equals: session.studentId } },
+              ],
+            },
+          ],
+        },
         orderBy: { timestamp: 'asc' },
       }),
     ]);
 
     // Verify audit chain for this session's records
-    const chainResult = await auditService.verifyChain(session.exam.institutionId);
+    const chainResult = await auditService.verifyChain();
 
     // Telemetry summary — count per type
     const telemetrySummary: Record<string, number> = {};
@@ -5501,6 +6362,7 @@ export class IntegrityReportService {
       noForbiddenProcesses: !hasEvent('FORBIDDEN_PROCESS_DETECTED'),
       displayCountOk:       !hasEvent('MULTIPLE_DISPLAYS_DETECTED'),
       ipReputationOk:       !hasEvent('VPN_DETECTED'),
+      ipReputationUnknown:  hasEvent('IP_INTEL_UNKNOWN'),
     };
   }
 }
@@ -5530,6 +6392,7 @@ interface IpIntelResult {
   asnOrg:       string;
   fraudScore:   number;  // 0–100; higher = more suspicious
   cached:       boolean;
+  unknown:      boolean;  // true when the API call failed and result is a fail-open default (API-4)
 }
 
 export class IpIntelService {
@@ -5540,7 +6403,7 @@ export class IpIntelService {
     // Private / loopback addresses always pass
     if (this.isPrivateIp(ip)) {
       return { ip, isVPN: false, isProxy: false, isDatacenter: false,
-               isTor: false, countryCode: 'LOCAL', asnOrg: '', fraudScore: 0, cached: true };
+               isTor: false, countryCode: 'LOCAL', asnOrg: '', fraudScore: 0, cached: true, unknown: false };
     }
 
     // Check cache first
@@ -5570,6 +6433,7 @@ export class IpIntelService {
         asnOrg:       data.organization ?? '',
         fraudScore:   data.fraud_score  ?? 0,
         cached:       false,
+        unknown:      false,
       };
 
       // Cache result
@@ -5577,22 +6441,38 @@ export class IpIntelService {
       return result;
 
     } catch (err) {
-      // Fail open on API timeout — log the failure but do not block exam entry
-      // Gate result recorded as "unknown" in audit log
+      // API call failed — result is unusable, not a verified "clean" IP.
+      // Caller (runGates) decides pass/fail based on IP_INTEL_FAIL_OPEN and
+      // proctoring tier, and records an IP_INTEL_UNKNOWN audit marker (API-4).
       logger.error({ err, ip }, 'IP intelligence API failed');
       return { ip, isVPN: false, isProxy: false, isDatacenter: false,
                isTor: false, countryCode: 'UNKNOWN', asnOrg: 'UNKNOWN',
-               fraudScore: 0, cached: false };
+               fraudScore: 0, cached: false, unknown: true };
     }
   }
 
   private isPrivateIp(ip: string): boolean {
+    // Unwrap IPv4-mapped IPv6 addresses (e.g. ::ffff:192.168.1.1)
+    const mapped = ip.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+    const addr = mapped ? mapped[1]! : ip;
+
+    // IPv6: loopback, link-local, and unique local (ULA) ranges
+    if (addr.includes(':')) {
+      const lower = addr.toLowerCase();
+      return lower === '::1' || lower.startsWith('fe80:') || lower.startsWith('fc') || lower.startsWith('fd');
+    }
+
+    // IPv4
+    const octets = addr.split('.').map(Number);
+    if (octets.length !== 4 || octets.some((o) => Number.isNaN(o))) return false;
+    const [a, b] = octets as [number, number, number, number];
+
     return (
-      ip.startsWith('10.') ||
-      ip.startsWith('192.168.') ||
-      ip.startsWith('172.') ||
-      ip === '127.0.0.1' ||
-      ip === '::1'
+      a === 10 ||                          // 10.0.0.0/8
+      (a === 172 && b >= 16 && b <= 31) ||  // 172.16.0.0/12
+      (a === 192 && b === 168) ||           // 192.168.0.0/16
+      (a === 100 && b >= 64 && b <= 127) || // 100.64.0.0/10 (CGNAT)
+      a === 127                             // 127.0.0.0/8 (loopback)
     );
   }
 }
@@ -5948,51 +6828,71 @@ describe('AuthService.login', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns tokens on valid credentials', async () => {
-    vi.mocked(db.user.findFirst).mockResolvedValue({
+    vi.mocked(db.institution.findFirst).mockResolvedValue({ id: 'inst-1', isActive: true } as any);
+    vi.mocked(db.user.findUnique).mockResolvedValue({
       id: 'user-1', email: 'a@b.com', passwordHash: 'hash',
       role: 'TEACHER', institutionId: 'inst-1',
       isActive: true, lockedUntil: null, failedLoginAttempts: 0,
+      isEmailVerified: true,
       firstName: 'A', lastName: 'B',
     } as any);
     vi.mocked(passwordService.verify).mockResolvedValue(true);
     vi.mocked(db.user.update).mockResolvedValue({} as any);
 
-    const result = await authService.login({ email: 'a@b.com', password: 'Password1!' }, '1.2.3.4', 'Mozilla');
+    const result = await authService.login({ institutionSlug: 'acme', email: 'a@b.com', password: 'Password1!' }, '1.2.3.4', 'Mozilla');
 
     expect(result.accessToken).toBe('mock-access-token');
     expect(result.user.email).toBe('a@b.com');
   });
 
+  it('throws when email not verified', async () => {
+    vi.mocked(db.institution.findFirst).mockResolvedValue({ id: 'inst-1', isActive: true } as any);
+    vi.mocked(db.user.findUnique).mockResolvedValue({
+      id: 'user-1', passwordHash: 'hash', isActive: true, lockedUntil: null, failedLoginAttempts: 0,
+      isEmailVerified: false,
+    } as any);
+    vi.mocked(passwordService.verify).mockResolvedValue(true);
+
+    await expect(
+      authService.login({ institutionSlug: 'acme', email: 'a@b.com', password: 'Password1!' }, '1.2.3.4', 'Mozilla'),
+    ).rejects.toMatchObject({ code: 'E1007' });
+  });
+
   it('throws on invalid password', async () => {
-    vi.mocked(db.user.findFirst).mockResolvedValue({
+    vi.mocked(db.institution.findFirst).mockResolvedValue({ id: 'inst-1', isActive: true } as any);
+    vi.mocked(db.user.findUnique).mockResolvedValue({
       id: 'user-1', passwordHash: 'hash', isActive: true, lockedUntil: null, failedLoginAttempts: 0,
     } as any);
     vi.mocked(passwordService.verify).mockResolvedValue(false);
     vi.mocked(db.user.update).mockResolvedValue({} as any);
 
     await expect(
-      authService.login({ email: 'a@b.com', password: 'wrong' }, '1.2.3.4', 'Mozilla'),
+      authService.login({ institutionSlug: 'acme', email: 'a@b.com', password: 'wrong' }, '1.2.3.4', 'Mozilla'),
     ).rejects.toMatchObject({ code: 'E1001', statusCode: 401 });
   });
 
   it('throws on account locked', async () => {
-    vi.mocked(db.user.findFirst).mockResolvedValue({
+    vi.mocked(db.institution.findFirst).mockResolvedValue({ id: 'inst-1', isActive: true } as any);
+    vi.mocked(db.user.findUnique).mockResolvedValue({
       id: 'user-1', passwordHash: 'hash', isActive: true,
       lockedUntil: new Date(Date.now() + 60_000), failedLoginAttempts: 5,
     } as any);
-    vi.mocked(passwordService.verify).mockResolvedValue(true);
 
     await expect(
-      authService.login({ email: 'a@b.com', password: 'Password1!' }, '1.2.3.4', 'Mozilla'),
+      authService.login({ institutionSlug: 'acme', email: 'a@b.com', password: 'Password1!' }, '1.2.3.4', 'Mozilla'),
     ).rejects.toMatchObject({ code: 'E1002' });
+
+    // SEC-5: locked accounts must short-circuit before Argon2 runs
+    expect(passwordService.verify).not.toHaveBeenCalled();
   });
 
   it('uses constant-time comparison even when user not found', async () => {
-    vi.mocked(db.user.findFirst).mockResolvedValue(null);
+    vi.mocked(db.institution.findFirst).mockResolvedValue({ id: 'inst-1', isActive: true } as any);
+    vi.mocked(db.user.findUnique).mockResolvedValue(null);
     vi.mocked(passwordService.verify).mockResolvedValue(false);
 
     const start = performance.now();
-    await authService.login({ email: 'x@y.com', password: 'Password1!' }, '1.2.3.4', 'Mozilla').catch(() => {});
+    await authService.login({ institutionSlug: 'acme', email: 'x@y.com', password: 'Password1!' }, '1.2.3.4', 'Mozilla').catch(() => {});
     const elapsed = performance.now() - start;
 
     // verify() must always be called — takes measurable time
@@ -6111,6 +7011,8 @@ const app = createApp();
 describe('Auth Integration', () => {
   const testEmail = `test_${Date.now()}@example.com`;
   let institutionId: string;
+  let institutionSlug: string;
+  let userId: string;
   let accessToken:   string;
   let refreshCookie: string;
 
@@ -6119,6 +7021,7 @@ describe('Auth Integration', () => {
       data: { name: 'Test Institution', slug: `test-${Date.now()}` },
     });
     institutionId = inst.id;
+    institutionSlug = inst.slug;
   });
 
   afterAll(async () => {
@@ -6128,16 +7031,23 @@ describe('Auth Integration', () => {
   it('POST /auth/register — creates user', async () => {
     const res = await request(app)
       .post('/v1/auth/register')
-      .send({ institutionId, email: testEmail, password: 'SecurePass1!@', firstName: 'Test', lastName: 'User', role: 'TEACHER' });
+      .send({ institutionId, email: testEmail, password: 'SecurePass1!@', firstName: 'Test', lastName: 'User' });
     expect(res.status).toBe(201);
     expect(res.body.user.email).toBe(testEmail);
+    expect(res.body.user.role).toBe('STUDENT');
+    expect(res.body.user.isEmailVerified).toBe(false);
     expect(res.body.user.passwordHash).toBeUndefined();  // never exposed
+    userId = res.body.user.id;
   });
 
   it('POST /auth/login — returns access token and sets HttpOnly cookie', async () => {
+    // Bypass real email delivery in this test — directly mark the account
+    // verified, equivalent to the user clicking the verification link.
+    await db.user.update({ where: { id: userId }, data: { isEmailVerified: true, emailVerifiedAt: new Date() } });
+
     const res = await request(app)
       .post('/v1/auth/login')
-      .send({ email: testEmail, password: 'SecurePass1!@' });
+      .send({ institutionSlug, email: testEmail, password: 'SecurePass1!@' });
     expect(res.status).toBe(200);
     expect(res.body.accessToken).toBeTypeOf('string');
     expect(res.headers['set-cookie']).toBeDefined();
@@ -6431,7 +7341,6 @@ online-exam-platform/
 │   │   │   │   └── workers/
 │   │   │   │       ├── grading.worker.ts
 │   │   │   │       ├── telemetry.worker.ts
-│   │   │   │       ├── sanitize.worker.ts
 │   │   │   │       └── report.worker.ts
 │   │   │   ├── utils/
 │   │   │   │   ├── errors.ts
@@ -6532,4 +7441,4 @@ online-exam-platform/
 
 *This Low Level Design document is complete. All 35 sections cover every component of the system from shared types through to deployment infrastructure. Implementation should follow the patterns specified here and any deviation must be updated in this document via a reviewed PR.*
 
-*Last updated: 2026-07-10*
+*Last updated: 2026-07-17*
