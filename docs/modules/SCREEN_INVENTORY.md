@@ -109,7 +109,7 @@ flowchart TD
     C --> D[Create/Edit Question]
     B --> E[Exam Builder]
     E --> F[Add Sections & Questions]
-    F --> G[Configure Settings - shuffle, threshold, penalty, time per question or section]
+    F --> G[Configure Settings - shuffle, threshold, penalty]
     G --> H[Submit for Approval]
     H -->|approved| I[Exam Published]
     H -->|rejected| F
@@ -168,11 +168,15 @@ flowchart TD
 | Landing Page | Pre-auth entry point, links to Login / Signup | — (static) |
 | Login | Credential entry, shared by all roles | `AuthService.login` |
 | Student Signup | Self-registration, STUDENT role only (per SEC-1's intended fix — see Issue #4). Captures the reference profile photo used later by M5's face-verification gate. | `AuthService.register` (role constrained to STUDENT) + photo upload — ⚠️ not in LLD, see Issue #8 |
-| Register Device (Student, first login) | Bind device fingerprint before first exam | `DeviceGateService.register` |
-| Forgot Password | Standard UX pattern | ⚠️ not in LLD — see Issue #1 |
-| Verify Email | Standard UX pattern | ⚠️ not in LLD — see Issue #1 |
+| Forgot Password | Enter email to request a reset link | ⚠️ not in LLD — see Issue #1 |
+| Check Your Email | Confirmation shown after Forgot Password submit — deliberately identical whether or not the email exists, no account-existence leak | ⚠️ not in LLD — see Issue #1 |
+| Reset Password | Reached via the emailed link (token in URL); enter new password | ⚠️ not in LLD — see Issue #1 |
+| Verify Email | Shown after Signup until the emailed verification link is clicked; landing screen when it is | ⚠️ not in LLD — see Issue #1 |
+| Register Device | Bind device fingerprint before first exam. Kept in M1 (not M5) for UX-grouping with My Devices, despite `DeviceGateService` being an M5-owned service — a deliberate exception, not an ownership mismatch | `DeviceGateService.register` |
+| My Devices | List registered devices (label, platform, last-seen), revoke one. Cap is 2 — a 3rd registration attempt is blocked and routed here to free a slot | `DELETE /devices/:id` |
+| My Profile / Account Settings | View/edit own account details | `GET /auth/me` |
 
-**Nav edges:** Landing Page → Login (existing users) / Student Signup (new students only). Student Signup → Register Device → Student Dashboard. Login → role-appropriate dashboard (§5–§11).
+**Nav edges:** Landing Page → Login (existing users) / Student Signup (new students only). Login → "Forgot Password?" → Forgot Password → Check Your Email → (emailed link) Reset Password → Login. Student Signup → Verify Email nag → (emailed link) Verify Email confirmation → Register Device → role-appropriate dashboard. Login → role-appropriate dashboard directly (returning, verified users). My Devices / My Profile reached via the user menu in the shared shell (§2), post-login only — not part of the auth sequence itself.
 
 ⚠️ Teacher/Institution Admin/Super Admin/Proctor/Approver accounts are provisioned via M2, not self-registered — Student Signup is the one exception, per SEC-1's recommended fix restricting the public endpoint to STUDENT only. Confirm this matches what PR #8 actually merged — see Issue #4.
 
