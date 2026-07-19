@@ -5128,27 +5128,31 @@ packages/electron/src/
 │   ├── display-manager.ts    # Monitor count enforcement
 │   ├── heartbeat.ts          # WebSocket heartbeat + session health
 │   ├── updater.ts            # Auto-update logic
+│   ├── attestation.ts        # Signs attestation tokens proving this is the real client
 │   └── ipc/
-│       ├── auth.ipc.ts       # IPC handlers for auth flows
-│       ├── device.ipc.ts     # IPC handlers for device registration
-│       ├── exam.ipc.ts       # IPC handlers for exam operations
-│       └── proctor.ipc.ts    # IPC handlers for proctoring data
-├── preload/
-│   └── index.ts              # contextBridge — the ONLY bridge between main & renderer
-└── renderer/                 # React app (exam UI)
-    ├── components/
-    │   ├── ExamLayout.tsx
-    │   ├── QuestionRenderer.tsx
-    │   ├── AnswerInput.tsx
-    │   ├── Timer.tsx
-    │   ├── SecurityGateFlow.tsx
-    │   └── CameraCapture.tsx
-    ├── hooks/
-    │   ├── useExamSession.ts
-    │   ├── useFaceDetection.ts
-    │   └── useTelemetry.ts
-    └── store/
-        └── exam.store.ts
+│       ├── device.ipc.ts     # IPC handlers for device fingerprint/gates/camera
+│       └── attestation.ipc.ts # IPC handler for attestation token generation
+│                              # FIX (hybrid architecture, Option A): auth.ipc.ts,
+│                              # exam.ipc.ts, proctor.ipc.ts removed — under
+│                              # Option A the renderer (packages/web) owns its
+│                              # own WebSocket/HTTP connection to the backend
+│                              # directly, identical to the pure-web path. Main
+│                              # process only handles things that genuinely
+│                              # require native access.
+└── preload/
+    └── index.ts              # contextBridge — exposes ONLY getAttestationToken()
+                               # to the remotely-loaded renderer. No bundled
+                               # renderer/ — the exam UI is the same web app
+                               # (packages/web), loaded via win.loadURL, not a
+                               # separate compiled React app. See 20.2/20.x for
+                               # why this is safe: the native lockdown modules
+                               # above (lockdown.ts, process-scanner.ts,
+                               # display-manager.ts, device.ts) are unaffected —
+                               # they run in the main process regardless of
+                               # where the renderer's HTML comes from. Safety
+                               # depends entirely on attestation.ts +
+                               # server-side verification (20.x), not on the
+                               # renderer being locally bundled.
 ```
 
 ### 20.2 Main Process — Window Creation
@@ -5160,24 +5164,45 @@ import path from 'path';
 import { LockdownManager } from './lockdown.js';
 import { setupIpcHandlers } from './ipc/index.js';
 import { updater } from './updater.js';
+import { env } from './config.js';   // WEB_ORIGIN
+
+// FIX (command-line switch exploit): some switches (remote-debugging-port
+// etc.) are consumed by Chromium before app code runs — this catches the
+// common case, not a guarantee. Real backstop is server-side attestation
+// (§20.x): a tampered client still can't get a session without it.
+const DANGEROUS_SWITCHES = ['disable-web-security', 'remote-debugging-port', 'remote-debugging-address', 'inspect', 'inspect-brk'];
+if (process.argv.some(arg => DANGEROUS_SWITCHES.some(sw => arg.includes(`--${sw}`)))) {
+  app.quit();
+  process.exit(1);
+}
 
 const lockdown = new LockdownManager();
 
+// FIX (hybrid architecture): loads packages/web via a dedicated route, not
+// a bundled renderer. That route's bundle must never import teacher/admin/
+// proctor router modules (build-config requirement, not enforceable here).
+const EXAM_CLIENT_ROUTE = `${env.WEB_ORIGIN}/electron/session-entry`;
+const ALLOWED_PREFIX     = `${env.WEB_ORIGIN}/electron/`;
+
 async function createWindow(): Promise<BrowserWindow> {
-  // Strict CSP for renderer
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+  // FIX (harm reduction, no subdomain): isolated cookie/storage jar from
+  // any regular browser session on the domain. Does not isolate against
+  // XSS injected into /electron/*'s own code — that needs the deferred
+  // subdomain migration; tracked as accepted residual risk.
+  const examSession = session.fromPartition('persist:examclient');
+
+  // FIX (wrong session target bug): must attach to examSession, not
+  // defaultSession — the window uses examSession, so an interceptor
+  // anywhere else silently never fires. FIX (dead nonce bug): CSP nonce
+  // must be server-owned (packages/web's /electron/* route sets it and
+  // matches it in rendered <script> tags) — Electron can't know the
+  // server's value, so it only adds Trusted Types here, nothing nonce-based.
+  examSession.webRequest.onHeadersReceived((details, callback) => {
+    const existing = details.responseHeaders?.['Content-Security-Policy']?.[0] ?? "default-src 'none'";
     callback({
       responseHeaders: {
         ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'none'; " +
-          "script-src 'self'; " +
-          "connect-src 'self' wss://api.examplatform.com; " +
-          "img-src 'self' data: blob:; " +
-          "style-src 'self'; " +
-          "media-src 'self' blob:; " +  // webcam
-          "frame-ancestors 'none';"
-        ],
+        'Content-Security-Policy': [`${existing}; require-trusted-types-for 'script';`],
       },
     });
   });
@@ -5197,29 +5222,66 @@ async function createWindow(): Promise<BrowserWindow> {
       sandbox:                     true,    // Extra renderer isolation
       webSecurity:                 true,
       allowRunningInsecureContent: false,
+      session:                     examSession,
+      // FIX (DevTools timing attack): disable the capability, don't react
+      // to it opening 
+      devTools:                    process.env['NODE_ENV'] === 'development',
       preload:                     path.join(__dirname, '../preload/index.js'),
     },
   });
 
-  // In production: load bundled file; in dev: load Vite dev server
+  // FIX (hybrid architecture): always load the remote route; dev/prod
+  // differ only in which origin env.WEB_ORIGIN points to.
+  await win.loadURL(EXAM_CLIENT_ROUTE);
   if (process.env['NODE_ENV'] === 'development') {
-    await win.loadURL('http://localhost:5173');
-    win.webContents.openDevTools();
-  } else {
-    await win.loadFile(path.join(__dirname, '../renderer/index.html'));
-    // Disable DevTools entirely in production
-    win.webContents.on('devtools-opened', () => win.webContents.closeDevTools());
+    win.webContents.openDevTools();   // safe: devTools:true only in dev
   }
 
-  // Prevent navigation away from the exam app
+  // FIX (hybrid architecture, Option A): main process has no connection of
+  // its own to the backend — natively-detected violations reach it only by
+  // being pushed to the renderer, which forwards over its own already-open
+  // WS connection. setViolationReporter existed but was never wired to
+  // anything; this is that wiring.
+  lockdown.setViolationReporter((type, data) => {
+    win.webContents.send('violation:native', { type, data });
+  });
+
+  // FIX (redirect gap): will-redirect is a separate event from
+  // will-navigate — an HTTP 30x could navigate externally without ever
+  // firing will-navigate. Both pinned to the same allowlist.
   win.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith('http://localhost') && !url.startsWith('file://')) {
+    if (!url.startsWith(ALLOWED_PREFIX)) {
+      event.preventDefault();
+    }
+  });
+  win.webContents.on('will-redirect', (event, url) => {
+    if (!url.startsWith(ALLOWED_PREFIX)) {
       event.preventDefault();
     }
   });
 
-  // Prevent opening new windows
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // FIX (SPA router bypass): will-navigate misses history.pushState — DOM
+  // has already changed by the time this fires, so it's a backstop, not
+  // prevention (real prevention is the code-split bundle noted above).
+  // Reports the attempt as a risk event, same as any other proctoring signal.
+  win.webContents.on('did-navigate-in-page', (event, url) => {
+    if (!url.startsWith(ALLOWED_PREFIX)) {
+      lockdown.report('SPA_ROUTE_ESCAPE_ATTEMPT', { url });
+      win.loadURL(EXAM_CLIENT_ROUTE);
+    }
+  });
+
+  // FIX (context menu escape route): Electron's built-in spellcheck menu
+  // offers Save As/Print on editable fields with nothing wired up — must
+  // be blocked unconditionally, not safe by omission.
+  win.webContents.on('context-menu', (event) => event.preventDefault());
+
+  // Prevent opening new windows — now logged: an attempted window.open()
+  // in a locked-down exam window is itself a suspicious signal.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    lockdown.report('WINDOW_OPEN_ATTEMPT', { url });
+    return { action: 'deny' };
+  });
 
   setupIpcHandlers(win);
   return win;
@@ -5254,6 +5316,13 @@ export class LockdownManager {
 
   setViolationReporter(fn: (type: string, data: object) => void) {
     this.reportViolation = fn;
+  }
+
+  // Public entry point for callers outside this class (e.g. main/index.ts's
+  // navigation/window-open guards) — reportViolation itself stays private;
+  // external code was never meant to reach into the field directly.
+  report(type: string, data: object) {
+    this.reportViolation?.(type, data);
   }
 
   async enable(win: BrowserWindow) {
@@ -5352,6 +5421,48 @@ export class LockdownManager {
 }
 ```
 
+### 20.3a Client Attestation
+
+```typescript
+// packages/electron/src/main/attestation.ts
+import crypto from 'crypto';
+import { app } from 'electron';
+import { env } from './config.js';
+
+// Signs a short-lived token proving a request came from the genuine
+// Electron binary, not a scripted client hitting the API directly.
+// ATTESTATION_HMAC_SECRET is embedded at build time (baked into the
+// signed binary), same rationale as ENTRY_TOKEN_HMAC_SECRET (L1) — never
+// transmitted on its own, only used to compute a verifiable signature.
+// Honest limit: a client-embedded secret can be extracted by a determined
+// reverse-engineer (no hardware-backed enclave here) — this raises the
+// bar past casual scripting, it doesn't make bypass impossible. Real
+// defense-in-depth is the AI proctoring layer (FR-031-038) that keeps
+// watching regardless of what the local client claims.
+export function generateAttestationToken(deviceId: string): string {
+  const payload = JSON.stringify({ deviceId, timestamp: Date.now(), appVersion: app.getVersion() });
+  const signature = crypto
+    .createHmac('sha256', Buffer.from(env.ATTESTATION_HMAC_SECRET, 'hex'))
+    .update(payload)
+    .digest('hex');
+  return `${Buffer.from(payload).toString('base64url')}.${signature}`;
+}
+```
+
+```typescript
+// packages/electron/src/main/ipc/attestation.ipc.ts
+import { ipcMain } from 'electron';
+import { generateAttestationToken } from '../attestation.js';
+import { getDeviceFingerprint } from '../device.js';
+
+export function registerAttestationHandlers() {
+  ipcMain.handle('attestation:get-token', async () => {
+    const deviceId = await getDeviceFingerprint();
+    return generateAttestationToken(deviceId);
+  });
+}
+```
+
 ### 20.4 Preload Script — contextBridge
 
 ```typescript
@@ -5362,52 +5473,52 @@ import { contextBridge, ipcRenderer } from 'electron';
 // interact with the main process. Nothing else is exposed.
 // The renderer has zero access to Node.js, Electron, or OS APIs.
 
+// FIX (drag-and-drop cheat notes): default Electron behavior lets a
+// dropped local file (text/HTML cheat sheet) trigger a navigation. Runs
+// here, not in the remote page's own JS, so it can't be skipped by
+// whatever ships in that bundle.
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => e.preventDefault());
+
+// FIX (hybrid architecture, Option A): the renderer is the same web app
+// (packages/web) and owns its own WebSocket connection to the backend
+// directly — JOIN, SUBMIT_ANSWER, SUBMIT_EXAM, ANALYSIS_RESULT, and all
+// server→client events (timer sync, proctor actions, exam terminated) are
+// plain socket.io-client calls in that page's own code, identical to the
+// pure-web path. examBridge exposes ONLY what genuinely requires native
+// access — nothing here proxies backend traffic; that would mean
+// reimplementing WebSocket relaying in the main process for no benefit,
+// since the renderer can already reach the backend on its own.
 contextBridge.exposeInMainWorld('examBridge', {
-  // ── Device & Gates ───────────────────────────────────────
+  // FIX (app verification / spoofed-browser access): the remote page calls
+  // this and attaches the result as a header on entry-gate/session-start
+  // requests it makes over its own connection. Only a request carrying a
+  // valid token passes server-side verification (§11/§12) — a plain
+  // browser hitting the same URL has no way to obtain one, since this only
+  // exists behind the contextBridge.
+  getAttestationToken: () =>
+    ipcRenderer.invoke('attestation:get-token'),
+
+  // ── Native-only capabilities ──────────────────────────────
   getDeviceFingerprint: () =>
     ipcRenderer.invoke('device:get-fingerprint'),
 
   runSecurityGates: (examId: string) =>
     ipcRenderer.invoke('device:run-gates', { examId }),
 
-  // ── Camera ───────────────────────────────────────────────
   getCameraDevices: () =>
     ipcRenderer.invoke('camera:get-devices'),
 
-  // ── Exam Session ─────────────────────────────────────────
-  joinExamSession: (entryToken: string, deviceId: string) =>
-    ipcRenderer.invoke('exam:join', { entryToken, deviceId }),
-
-  submitAnswer: (payload: { questionId: string; sessionId: string; response: unknown; timeSpentMs: number }) =>
-    ipcRenderer.invoke('exam:submit-answer', payload),
-
-  submitExam: (sessionId: string) =>
-    ipcRenderer.invoke('exam:submit', { sessionId }),
-
-  // ── Proctoring ───────────────────────────────────────────
-  reportAnalysis: (result: {
-    faceDetected: boolean;
-    multipleFaces: boolean;
-    gazeOffScreen: boolean;
-    confidence: number;
-    sessionId: string;
-  }) => ipcRenderer.invoke('proctor:report-analysis', result),
-
-  reportViolation: (type: string, metadata: object) =>
-    ipcRenderer.invoke('proctor:report-violation', { type, metadata }),
-
-  // ── Server events → renderer ─────────────────────────────
-  onTimerSync: (cb: (data: { remainingMs: number }) => void) => {
-    ipcRenderer.on('timer:sync', (_e, data) => cb(data));
-    return () => ipcRenderer.removeAllListeners('timer:sync');
-  },
-  onProctoringAction: (cb: (action: { type: string; message?: string }) => void) => {
-    ipcRenderer.on('proctor:action', (_e, action) => cb(action));
-    return () => ipcRenderer.removeAllListeners('proctor:action');
-  },
-  onExamTerminated: (cb: (reason: string) => void) => {
-    ipcRenderer.on('exam:terminated', (_e, reason) => cb(reason));
-    return () => ipcRenderer.removeAllListeners('exam:terminated');
+  // FIX (hybrid architecture, Option A): violations detected IN the main
+  // process (forbidden process, keyboard shortcut, SPA route escape,
+  // window.open attempt — see lockdown.ts and main/index.ts) have no way
+  // to reach the backend on their own; main process doesn't hold a
+  // connection to it. This is the relay: main pushes the event here, the
+  // renderer forwards it over its own already-open WS connection
+  // (VIOLATION_REPORT), the same way it reports anything else.
+  onNativeViolation: (cb: (violation: { type: string; data: object }) => void) => {
+    ipcRenderer.on('violation:native', (_e, violation) => cb(violation));
+    return () => ipcRenderer.removeAllListeners('violation:native');
   },
 });
 
@@ -5419,89 +5530,9 @@ declare global {
 }
 ```
 
-### 20.5 Renderer — Face Detection Hook
+### 20.5 Face Detection Hook
 
-```typescript
-// packages/electron/src/renderer/hooks/useFaceDetection.ts
-import { useEffect, useRef, useCallback } from 'react';
-import * as faceapi from 'face-api.js';
-
-interface FaceAnalysis {
-  faceDetected:  boolean;
-  multipleFaces: boolean;
-  gazeOffScreen: boolean;
-  confidence:    number;
-}
-
-export function useFaceDetection(
-  videoRef: React.RefObject<HTMLVideoElement>,
-  sessionId: string,
-  enabled: boolean,
-) {
-  const intervalRef  = useRef<NodeJS.Timeout>();
-  const modelsLoaded = useRef(false);
-
-  useEffect(() => {
-    if (!enabled) return;
-
-    const loadModels = async () => {
-      if (modelsLoaded.current) return;
-      // Models bundled with the Electron app, loaded from local file system
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri('/models'),
-        faceapi.nets.faceLandmark68TinyNet.loadFromUri('/models'),
-      ]);
-      modelsLoaded.current = true;
-    };
-
-    const analyze = async () => {
-      if (!videoRef.current || !modelsLoaded.current) return;
-
-      const detections = await faceapi
-        .detectAllFaces(videoRef.current, new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 }))
-        .withFaceLandmarks(true);
-
-      const faceDetected  = detections.length > 0;
-      const multipleFaces = detections.length > 1;
-      let gazeOffScreen   = false;
-      let confidence      = 0;
-
-      if (detections.length === 1) {
-        const detection = detections[0]!;
-        confidence      = detection.detection.score;
-
-        // Gaze estimation: use eye landmark positions relative to face box
-        const landmarks = detection.landmarks;
-        const leftEye   = landmarks.getLeftEye();
-        const rightEye  = landmarks.getRightEye();
-        const faceBox   = detection.detection.box;
-
-        // Simple gaze: if eye centers are near the face box edges, gaze is off
-        const eyeCenterX = (
-          leftEye.reduce((s, p) => s + p.x, 0) / leftEye.length +
-          rightEye.reduce((s, p) => s + p.x, 0) / rightEye.length
-        ) / 2;
-
-        const normalizedX = (eyeCenterX - faceBox.left) / faceBox.width;
-        gazeOffScreen = normalizedX < 0.2 || normalizedX > 0.8;
-      }
-
-      const analysis: FaceAnalysis = { faceDetected, multipleFaces, gazeOffScreen, confidence };
-
-      // Send to main process via contextBridge (never directly to server from renderer)
-      await window.examBridge.reportAnalysis({ ...analysis, sessionId });
-    };
-
-    loadModels().then(() => {
-      intervalRef.current = setInterval(analyze, 3_000); // every 3 seconds
-    });
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [enabled, sessionId]);
-}
-```
+FIX (hybrid architecture): this hook now lives in `packages/web/src/routes/electron/hooks/useFaceDetection.ts`, not in this package — there is no local `renderer/` anymore (§20.1). Logic is unchanged; only its location moved, since the exam UI it belongs to is the remote page loaded via §20.2, not a bundled Electron build. See `packages/web`'s own module docs for the current version of this hook.
 
 ### 20.6 Process Scanner
 
@@ -7410,4 +7441,4 @@ online-exam-platform/
 
 *This Low Level Design document is complete. All 35 sections cover every component of the system from shared types through to deployment infrastructure. Implementation should follow the patterns specified here and any deviation must be updated in this document via a reviewed PR.*
 
-*Last updated: 2026-07-10*
+*Last updated: 2026-07-17*
