@@ -74,7 +74,7 @@ jobs:
       - name: Install Semgrep
         run: pip install semgrep
       - name: Semgrep scan (auto config, community rules)
-        run: semgrep scan --config auto --error --skip-unknown-extensions
+        run: semgrep scan --config p/default --error --skip-unknown-extensions
         env:
           # No SEMGREP_APP_TOKEN — runs fully local against community rules.
           SEMGREP_SEND_METRICS: 'off'
@@ -89,7 +89,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Trivy filesystem scan (deps + secrets in files)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           scan-type: fs
           scanners: vuln,misconfig,secret
@@ -98,7 +98,7 @@ jobs:
           exit-code: '0'   # report, don't fail the build on findings (advisory today)
 
       - name: Trivy config scan (IaC / workflow / Dockerfile misconfig)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           scan-type: config
           format: sarif
