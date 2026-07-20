@@ -9,35 +9,21 @@
 
 ## Table of Contents
 
-1. [Purpose](#1-purpose)
-2. [Design Philosophy](#2-design-philosophy)
-3. [What We Explicitly Avoid](#3-what-we-explicitly-avoid)
-4. [Design Identity](#4-design-identity)
-5. [Timelessness](#5-timelessness)
-6. [Visual Language](#6-visual-language)
-7. [Information Density](#7-information-density)
-8. [Consistency](#8-consistency)
-9. [Interaction](#9-interaction)
-10. [Accessibility](#10-accessibility)
-11. [AI Development Rule](#11-development-rule)
-12. [Source of Truth](#12-source-of-truth)
+1. [Design Philosophy](#1-design-philosophy)
+2. [What We Explicitly Avoid](#2-what-we-explicitly-avoid)
+3. [Design Identity](#3-design-identity)
+4. [Timelessness](#4-timelessness)
+5. [Visual Language](#5-visual-language)
+6. [Information Density](#6-information-density)
+7. [Consistency](#7-consistency)
+8. [Interaction](#8-interaction)
+9. [Accessibility](#9-accessibility)
+10. [AI Development Rule](#10-ai-development-rule)
+11. [Source of Truth](#11-source-of-truth)
 
 ---
 
-## 1.Purpose
-
-This document defines the visual design language for every user interface
-within the Online Exam Platform.
-
-It establishes the principles that guide design decisions across all
-modules.
-
-Component specifications, layout patterns, and implementation details are
-defined elsewhere.
-
----
-
-## 2. Design Philosophy
+## 1. Design Philosophy
 
 This platform is an examination system, not a marketing website.
 
@@ -56,15 +42,14 @@ The design language prioritizes:
 - precision over visual trends
 - usability under pressure over aesthetics for screenshots
 
-The interface should present a coherent and recognizable product identity.
 Users should immediately recognize the interface as purpose-built
 software, not a template.
 
 ---
 
-## 3. What We Explicitly Avoid
+## 2. What We Explicitly Avoid
 
-Do not imitate current generic,AI-generated dashboard aesthetics.
+Do not imitate current AI-generated dashboard aesthetics.
 
 Avoid:
 
@@ -87,7 +72,7 @@ or an automatically generated dashboard, it should be reconsidered.
 
 ---
 
-## 4. Design Identity
+## 3. Design Identity
 
 The visual language should resemble professional examination, financial,
 aviation, medical, and engineering software.
@@ -104,7 +89,7 @@ design.
 
 ---
 
-## 5. Timelessness
+## 4. Timelessness
 
 Interfaces should still look appropriate five to ten years from now.
 
@@ -117,7 +102,17 @@ UI trends disappear.
 
 ---
 
-## 6. Visual Language
+## 5. Visual Language
+
+### Signature Motif
+
+A persistent asymmetric layout across auth/gate screens: a narrower dark
+navy "Credential Panel" (institution context, monospace reference code,
+perforated-edge border treatment evoking a ticket stub) alongside the
+functional form area. Justified by what this product actually is —
+credentialing and identity gates — not decoration for its own sake. The
+panel's content changes meaningfully per screen (e.g. institution name on
+Login), so it carries real information, not just visual flourish.
 
 ### Color
 
@@ -152,7 +147,7 @@ Avoid soft, pill-shaped interfaces.
 
 ---
 
-## 7. Information Density
+## 6. Information Density
 
 Every pixel should contribute useful information.
 
@@ -163,7 +158,7 @@ Large monitors should expose more information, not larger empty areas.
 
 ---
 
-## 8. Consistency
+## 7. Consistency
 
 Every module belongs to one product.
 
@@ -174,7 +169,7 @@ Do not introduce different visual styles between modules.
 
 ---
 
-## 9. Interaction
+## 8. Interaction
 
 Interfaces should minimize user effort.
 
@@ -188,7 +183,7 @@ Dialogs should never interrupt workflow unnecessarily.
 
 ---
 
-## 10. Accessibility
+## 9. Accessibility
 
 Accessibility is part of the design, not an optional enhancement.
 
@@ -200,7 +195,9 @@ Never communicate meaning using color alone.
 
 ---
 
-## 11. Development Rule
+## 10. Development Rule
+
+The code must follow this document.
 
 When multiple reasonable UI implementations exist, prefer the one that
 best preserves:
@@ -215,7 +212,7 @@ the project owner.
 
 ---
 
-## 12. Source of Truth
+## 11. Source of Truth
 
 This document defines the project's UI design language.
 
