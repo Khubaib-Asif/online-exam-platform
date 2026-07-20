@@ -1,0 +1,51 @@
+
+language: en-US
+
+reviews:
+   # Enforce rigorous feedback profile for high-stakes platform security
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+
+  path_filters:
+    # Screen design artifacts (PNG mockups + Figma source) — not code to review.
+    # OPEN_ISSUES.md and other Markdown in screens/ stay reviewable.
+    - '!docs/modules/*/screens/*.png'
+    - '!docs/modules/*/screens/*.fig'
+
+  path_instructions:
+    - path: 'docs/**'
+      instructions: >-
+        This is a docs-first repository. docs/srs, docs/architecture,
+        docs/compliance, docs/design/UI_GUIDELINES.md, docs/HIGH_LEVEL_DESIGN.md,
+        docs/LOW_LEVEL_DESIGN.md, and docs/modules are FROZEN sources of truth
+        once signed off. Flag any PR that edits them without an explicit stated
+        reason. Do not suggest rewording of frozen specs.
+    - path: 'docs/modules/**'
+      instructions: >-
+        The project is decomposed into modules M1–M8 (M1 Auth & Identity,
+        M2 Institution & Tenant Management, M3 Question Bank, M4 Exam Builder &
+        Approval, M5 Device & Security Gate, M6 Session Orchestration Core,
+        M7 Proctoring Engine & Dashboard, M8 Grading & Audit). Each module has a
+        FLOW.md and a COMPONENTS.md. Check that changes to one module's artifacts
+        stay consistent with the LLD and the SCREEN_INVENTORY.
+    - path: '.github/workflows/**'
+      instructions: >-
+        Workflows are built ahead of implementation code and must stay green on
+        a docs-only repo: code-dependent jobs are gated via the `detect` job's
+        has_code output. Flag any code-dependent job that is NOT gated, and any
+        job-level `if: hashFiles('package.json')` (that pattern is broken — it
+        evaluates before checkout). Enforce least-privilege `permissions:`.
+    - path: '**/*.{ts,js}'
+      instructions: >-
+        Implementation code does not exist yet. When it lands it must follow the
+        LLD exactly (services, error codes, schemas). Prioritize security,
+        input validation, and correctness of auth/session/device logic.
+
+chat:
+  auto_reply: true

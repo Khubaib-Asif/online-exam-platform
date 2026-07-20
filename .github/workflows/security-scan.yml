@@ -1,20 +1,124 @@
-
 name: Security Scan Pipeline
+
+# Runs static security analysis using CodeQL, Semgrep, and Trivy
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  schedule:
+    # Weekly full scan, Mondays 07:17 UTC (off the top of the hour on purpose)
+    - cron: '17 7 * * 1'
 
-permissions: read-all
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  security_pipeline:
+  # ── Gate: CodeQL only runs once real code exists ──
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      has_code: ${{ steps.check.outputs.has_code }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        name: Detect package.json
+        run: |
+          if [ -f package.json ]; then
+            echo "has_code=true" >> "$GITHUB_OUTPUT"
+            echo "package.json found — CodeQL will run."
+          else
+            echo "has_code=false" >> "$GITHUB_OUTPUT"
+            echo "No package.json — CodeQL skipped (would error on a docs-only repo)."
+          fi
+
+  # ── CodeQL: default query suite, javascript-typescript ──
+  codeql:
+    needs: detect
+    if: needs.detect.outputs.has_code == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # required to upload SARIF results
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ javascript-typescript ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # default query suite (security-extended not enabled to keep it fast/free)
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:${{ matrix.language }}'
+
+  # ── Semgrep: Native python environment execution to bypass musl container crashes
+  semgrep:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Placeholder for security scanner
-        run: echo "Security scanning tools will execute here "
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Semgrep
+        run: pip install semgrep
+      - name: Semgrep scan (auto config, community rules)
+        run: semgrep scan --config auto --error --skip-unknown-extensions
+        env:
+          # No SEMGREP_APP_TOKEN — runs fully local against community rules.
+          SEMGREP_SEND_METRICS: 'off'
 
+  # ── Trivy: filesystem + config scanning. Runs now on whatever exists. ──
+  trivy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # required to upload SARIF results
+    steps:
+      - uses: actions/checkout@v4
 
+      - name: Trivy filesystem scan (deps + secrets in files)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,misconfig,secret
+          format: sarif
+          output: trivy-fs.sarif
+          exit-code: '0'   # report, don't fail the build on findings (advisory today)
+
+      - name: Trivy config scan (IaC / workflow / Dockerfile misconfig)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          format: sarif
+          output: trivy-config.sarif
+          exit-code: '0'
+
+      # NOTE: Trivy image (container) scanning mode is NOT configured here.
+      # It activates as a separate, deferred decision once a Dockerfile exists
+      
+
+      - name: Upload Trivy filesystem SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Upload Trivy config SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config

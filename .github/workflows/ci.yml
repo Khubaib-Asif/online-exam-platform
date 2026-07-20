@@ -6,14 +6,179 @@ on:
   pull_request:
     branches: [ main ]
 
-permissions: read-all
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  ci_pipeline:
+  # ── Gate: does real code exist yet? Unconditional, cheap, checks out the tree ──
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      has_code: ${{ steps.check.outputs.has_code }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        name: Detect package.json
+        run: |
+          if [ -f package.json ]; then
+            echo "has_code=true" >> "$GITHUB_OUTPUT"
+            echo "package.json found — code-dependent jobs will run."
+          else
+            echo "has_code=false" >> "$GITHUB_OUTPUT"
+            echo "No package.json — code-dependent jobs will be skipped (docs-only repo)."
+          fi
+
+  # ── Docs quality: runs unconditionally, works on the repo as it exists  ──
+  docs-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Placeholder for linting
-        run: echo "Linting will be added when code exists"
-      - name: Placeholder for security scan
-        run: echo "Security scan will be added when dependencies exist"
+
+      - name: Lint Markdown (markdownlint-cli2)
+        uses: DavidAnson/markdownlint-cli2-action@v16
+        with:
+          globs: 'docs/**/*.md'
+
+      - name: Check links (lychee)
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress --verbose 'docs/**/*.md' 'README.md'
+          fail: true
+
+  # ── npm ci: validates the lockfile installs cleanly and primes the npm cache ──
+  install:
+    needs: detect
+    if: needs.detect.outputs.has_code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+
+  lint:
+    needs: [ detect, install ]
+    if: needs.detect.outputs.has_code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: ESLint
+        run: npm run lint
+
+  typecheck:
+    needs: [ detect, install ]
+    if: needs.detect.outputs.has_code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: tsc --noEmit
+        run: npx tsc --noEmit
+
+  unit-test:
+    needs: [ detect, install ]
+    if: needs.detect.outputs.has_code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Unit tests
+        run: npm run test:unit
+
+  # ── Dynamic testing: REAL Postgres + Redis service containers, real suite ──
+  integration-test:
+    needs: [ detect, install ]
+    if: needs.detect.outputs.has_code == 'true'
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: exam
+          POSTGRES_PASSWORD: exam
+          POSTGRES_DB: exam_test
+        ports:
+          - 5432:5432
+        # GitHub Actions native health check — job waits for this before starting steps
+        options: >-
+          --health-cmd "pg_isready -U exam -d exam_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://exam:exam@localhost:5432/exam_test
+      REDIS_URL: redis://localhost:6379
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+       # Manual retry loop prevents flakiness from a premature container health-check pass
+      - name: Wait for Postgres to accept connections
+        run: |
+          for i in $(seq 1 15); do
+            if pg_isready -h localhost -p 5432 -U exam -d exam_test; then
+              echo "Postgres is ready."
+              exit 0
+            fi
+            echo "Attempt $i: Postgres not ready yet, waiting 2s..."
+            sleep 2
+          done
+          echo "Postgres did not become ready in time." >&2
+          exit 1
+
+      - name: Apply database migrations
+        run: npx prisma migrate deploy
+
+      - name: Integration tests
+        run: npm run test:integration
+
+  # ── Build: only after lint + typecheck + all tests pass ──
+  build:
+    needs: [ detect, lint, typecheck, unit-test, integration-test ]
+    if: needs.detect.outputs.has_code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: npm run build
