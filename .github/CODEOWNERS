@@ -1,0 +1,15 @@
+# CODEOWNERS — automatic review requests
+# https://docs.github.com/articles/about-code-owners
+# Syntax: <path pattern>  <owner(s)>. Last matching pattern wins.
+
+# Default owner for everything until module contributors are assigned.
+*                               @Khubaib-Asif
+
+# Frozen, signed-off design sources — the repo owner must approve any change.
+/docs/HIGH_LEVEL_DESIGN.md      @Khubaib-Asif
+/docs/LOW_LEVEL_DESIGN.md       @Khubaib-Asif
+
+# CI/CD and repo governance.
+/.github/                       @Khubaib-Asif
+
+
