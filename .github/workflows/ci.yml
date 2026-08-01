@@ -20,7 +20,7 @@ jobs:
     outputs:
       has_code: ${{ steps.check.outputs.has_code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: check
         name: Detect package.json
         run: |
@@ -36,7 +36,7 @@ jobs:
   docs-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Lint Markdown (markdownlint-cli2)
         uses: DavidAnson/markdownlint-cli2-action@v16
@@ -55,7 +55,7 @@ jobs:
     if: needs.detect.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -68,7 +68,7 @@ jobs:
     if: needs.detect.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -82,7 +82,7 @@ jobs:
     if: needs.detect.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -96,7 +96,7 @@ jobs:
     if: needs.detect.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -141,7 +141,7 @@ jobs:
       REDIS_URL: redis://localhost:6379
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -174,7 +174,7 @@ jobs:
     if: needs.detect.outputs.has_code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
