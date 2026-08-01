@@ -18,7 +18,7 @@
 
 ## Checklist
 
-- [ ] Scope is a single module / fix — no unrelated refactors (per CLAUDE.md workflow)
+- [ ] Scope is a single module / fix — no unrelated refactors 
 - [ ] No frozen docs modified without an explicit reason stated above
       (`docs/srs`, `docs/architecture`, `docs/compliance`, `docs/design/UI_GUIDELINES.md`,
       `docs/HIGH_LEVEL_DESIGN.md`, `docs/LOW_LEVEL_DESIGN.md`, `docs/modules`)
