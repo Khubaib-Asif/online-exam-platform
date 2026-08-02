@@ -11,13 +11,13 @@ assignees: []
 <!-- Pick the affected module (see docs/modules/SCREEN_INVENTORY.md). -->
 
 - [ ] M1 — Auth & Identity
-- [ ] M2 — Institution & Tenant Management
+- [ ] M2 — Exam Registration & Access
 - [ ] M3 — Question Bank
-- [ ] M4 — Exam Builder & Approval
+- [ ] M4 — Exam Builder & publication
 - [ ] M5 — Device & Security Gate
 - [ ] M6 — Session Orchestration Core
-- [ ] M7 — Proctoring Engine & Dashboard
-- [ ] M8 — Grading & Audit
+- [ ] M7 — Proctoring Engine & Integrity
+- [ ] M8 — Grading, Results & Audit
 - [ ] Docs / design specs (SRS, HLD, LLD, UI guidelines)
 - [ ] CI/CD / repo tooling
 - [ ] Other / not sure

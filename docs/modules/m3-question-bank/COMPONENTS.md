@@ -2,7 +2,7 @@
 
 **Module:** M3 — Question Bank
 **Primary surface:** Shared web application
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §9; `docs/LOW_LEVEL_DESIGN.md` §8; `docs/modules/SCREEN_INVENTORY.md` §7
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §9; `docs/architecture/LOW_LEVEL_DESIGN.md` §8; `docs/modules/SCREEN_INVENTORY.md` §7
 
 This document defines M3-owned components and their boundaries. The LLD remains authoritative for transport envelopes, database schema, and shared validation primitives.
 

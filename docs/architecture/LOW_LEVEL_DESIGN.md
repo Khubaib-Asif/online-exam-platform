@@ -4,7 +4,7 @@
 **Document Maintainer:** M. Khubaib Asif
 **Version:** 2.0
 **Status:** Final implementation baseline for the single-platform, Electron-only exam engine.
-**Related Documents:** `file HIGH_LEVEL_DESIGN.md`, `docs/srs/*`, `file docs/modules/MODULE_DECOMPOSITION.md`, `file docs/modules/SCREEN_INVENTORY.md`, `file docs/design/UI_GUIDELINES.md`
+**Related Documents:** `file architecture/HIGH_LEVEL_DESIGN.md`, `docs/srs/*`, `file docs/modules/MODULE_DECOMPOSITION.md`, `file docs/modules/SCREEN_INVENTORY.md`, `file docs/design/UI_GUIDELINES.md`
 
 ---
 

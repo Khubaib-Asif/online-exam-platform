@@ -3,7 +3,7 @@
 **Module:** M8 — Grading, Results & Audit
 **Primary actors:** Teacher, Student, AI grading worker, authorised reviewer
 **Primary surface:** Shared web application
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 11, 13, 16; `docs/LOW_LEVEL_DESIGN.md` §16; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §12
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 11, 13, 16; `docs/architecture/LOW_LEVEL_DESIGN.md` §16; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §12
 
 M8 converts a submitted attempt into a reviewable result, obtains teacher decisions for subjective answers, publishes an immutable result snapshot, and records the audit trail. The teacher who owns the exam publishes results; no class or institution assignment is required in v1.
 

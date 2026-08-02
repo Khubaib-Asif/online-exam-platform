@@ -2,7 +2,7 @@
 
 **Module:** M1 — Auth & Identity
 **Status:** v1 boundary; no open v1 requirements
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§5, 9, 11, 13; `docs/LOW_LEVEL_DESIGN.md` §§5–7, 19; `docs/modules/SCREEN_INVENTORY.md` §5
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§5, 9, 11, 13; `docs/architecture/LOW_LEVEL_DESIGN.md` §§5–7, 19; `docs/modules/SCREEN_INVENTORY.md` §5
 
 ## Deferred capabilities
 

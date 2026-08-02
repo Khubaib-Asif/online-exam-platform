@@ -2,7 +2,7 @@
 
 **Module:** M7 — Proctoring & Integrity
 **Status:** v1 boundary; no open v1 requirements
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 13; `docs/LOW_LEVEL_DESIGN.md` §15
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 13; `docs/architecture/LOW_LEVEL_DESIGN.md` §15
 
 ## Deferred capabilities
 

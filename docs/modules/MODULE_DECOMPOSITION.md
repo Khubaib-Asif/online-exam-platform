@@ -4,7 +4,7 @@
 **Document Maintainer:** M. Khubaib Asif
 **Version:** 2.0
 **Status:** Current module map for the single-platform, Simple Poly-App architecture
-**Related Documents:** `file docs/HIGH_LEVEL_DESIGN.md`, `file docs/LOW_LEVEL_DESIGN.md`, `docs/srs/`, `file docs/modules/SCREEN_INVENTORY.md`
+**Related Documents:** `file docs/architecture/HIGH_LEVEL_DESIGN.md`, `file docs/architecture/LOW_LEVEL_DESIGN.md`, `docs/srs/`, `file docs/modules/SCREEN_INVENTORY.md`
 
 ---
 

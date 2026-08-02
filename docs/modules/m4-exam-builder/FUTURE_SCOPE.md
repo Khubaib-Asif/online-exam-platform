@@ -2,7 +2,7 @@
 
 **Module:** M4 — Exam Builder & Publication
 **Status:** v1 boundary; no open v1 requirements
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 12, 14; `docs/LOW_LEVEL_DESIGN.md` §9; `docs/modules/MODULE_DECOMPOSITION.md` §3
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 12, 14; `docs/architecture/LOW_LEVEL_DESIGN.md` §9; `docs/modules/MODULE_DECOMPOSITION.md` §3
 
 This file records deliberately deferred authoring capabilities. It does not alter v1 timing, publication, or registration rules.
 

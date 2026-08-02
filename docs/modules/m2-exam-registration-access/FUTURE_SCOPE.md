@@ -2,7 +2,7 @@
 
 **Module:** M2 — Exam Registration & Access
 **Status:** v1 boundary; no open v1 requirements
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 14; `docs/LOW_LEVEL_DESIGN.md` §10; `docs/modules/MODULE_DECOMPOSITION.md` §2.2
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 14; `docs/architecture/LOW_LEVEL_DESIGN.md` §10; `docs/modules/MODULE_DECOMPOSITION.md` §2.2
 
 This file records deliberately deferred work. It does not create v1 requirements, schemas, screens, or approval authorities.
 

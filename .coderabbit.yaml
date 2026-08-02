@@ -14,7 +14,6 @@ reviews:
 
   path_filters:
     # Screen design artifacts (PNG mockups + Figma source) — not code to review.
-    # OPEN_ISSUES.md and other Markdown in screens/ stay reviewable.
     - '!docs/modules/*/screens/*.png'
     - '!docs/modules/*/screens/*.fig'
 
@@ -22,18 +21,18 @@ reviews:
     - path: 'docs/**'
       instructions: >-
         This is a docs-first repository. docs/srs, docs/architecture,
-        docs/compliance, docs/design/UI_GUIDELINES.md, docs/HIGH_LEVEL_DESIGN.md,
-        docs/LOW_LEVEL_DESIGN.md, and docs/modules are FROZEN sources of truth
+        docs/compliance, docs/design/UI_GUIDELINES.md, docs/architecture/HIGH_LEVEL_DESIGN.md,
+        docs/architecture/LOW_LEVEL_DESIGN.md, and docs/modules are FROZEN sources of truth
         once signed off. Flag any PR that edits them without an explicit stated
         reason. Do not suggest rewording of frozen specs.
     - path: 'docs/modules/**'
       instructions: >-
         The project is decomposed into modules M1–M8 (M1 Auth & Identity,
-        M2 Institution & Tenant Management, M3 Question Bank, M4 Exam Builder &
-        Approval, M5 Device & Security Gate, M6 Session Orchestration Core,
-        M7 Proctoring Engine & Dashboard, M8 Grading & Audit). Each module has a
+        M2 Exam Registration & Access, M3 Question Bank, M4 Exam Builder &
+        Publication, M5 Device & Security Gates, M6 Exam Session Orchestration,
+        M7 Proctoring & Integrity, M8 Grading, Results & Audit). Each module has a
         FLOW.md and a COMPONENTS.md. Check that changes to one module's artifacts
-        stay consistent with the LLD and the SCREEN_INVENTORY.
+        stay consistent with the HLD,LLD and the SCREEN_INVENTORY.
     - path: '.github/workflows/**'
       instructions: >-
         Workflows are built ahead of implementation code and must stay green on

@@ -4,7 +4,7 @@
 **Document Maintainer:** M. Khubaib Asif
 **Version:** 2.0
 **Status:** Revised single-platform architecture baseline; Electron-only attempts; persistent two-device registration; server-authoritative timing, navigation, grading, and result publication.
-**Related Documents:** `file docs/LOW_LEVEL_DESIGN.md`, `docs/srs/*`, `file docs/modules/MODULE_DECOMPOSITION.md`, `file docs/modules/SCREEN_INVENTORY.md`, `file docs/design/UI_GUIDELINES.md`
+**Related Documents:** `file docs/architecture/LOW_LEVEL_DESIGN.md`, `docs/srs/*`, `file docs/modules/MODULE_DECOMPOSITION.md`, `file docs/modules/SCREEN_INVENTORY.md`, `file docs/design/UI_GUIDELINES.md`
 
 ---
 

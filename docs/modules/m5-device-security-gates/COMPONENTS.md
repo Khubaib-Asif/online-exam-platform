@@ -2,7 +2,7 @@
 
 **Module:** M5 — Device & Security Gates
 **Primary surfaces:** Shared web application and signed Electron shell
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§5, 9, 13; `docs/LOW_LEVEL_DESIGN.md` §§11, 14, 17
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§5, 9, 13; `docs/architecture/LOW_LEVEL_DESIGN.md` §§11, 14, 17
 
 M5 defines device and entry components only. Live timing and question rendering belong to M6; proctoring evidence evaluation belongs to M7.
 
