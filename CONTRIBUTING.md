@@ -11,7 +11,7 @@ signed off before implementation begins:
 
 - `docs/srs/` — actors, user stories, functional & non-functional requirements,
   traceability matrix.
-- `docs/HIGH_LEVEL_DESIGN.md`, `docs/LOW_LEVEL_DESIGN.md` — the HLD and LLD.
+- `docs/architecture/HIGH_LEVEL_DESIGN.md`, `docs/architecture/LOW_LEVEL_DESIGN.md` — the HLD and LLD.
 - `docs/architecture/`, `docs/compliance/`, `docs/design/UI_GUIDELINES.md`.
 - `docs/modules/` — module decomposition, screen inventory, and per-module
   design artifacts (`FLOW.md`, `COMPONENTS.md`).
@@ -38,8 +38,8 @@ truth. Do not modify these without an explicit reason stated in the PR:
 - `docs/architecture/README.md`
 - `docs/compliance/README.md`
 - `docs/design/UI_GUIDELINES.md`
-- `docs/HIGH_LEVEL_DESIGN.md`
-- `docs/LOW_LEVEL_DESIGN.md`
+- `docs/architecture/HIGH_LEVEL_DESIGN.md`
+- `docs/architecture/LOW_LEVEL_DESIGN.md`
 - `docs/modules/`
 
 If implementation reveals that a frozen spec is wrong or incomplete, **stop and

@@ -2,7 +2,7 @@
 
 **Module:** M7 — Proctoring & Integrity
 **Primary surfaces:** Electron-loaded web application for capture/telemetry; shared web application for review
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§5, 9, 13; `docs/LOW_LEVEL_DESIGN.md` §15
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§5, 9, 13; `docs/architecture/LOW_LEVEL_DESIGN.md` §15
 
 ## 1. Capture and review components
 

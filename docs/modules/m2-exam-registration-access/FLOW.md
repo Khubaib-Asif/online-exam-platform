@@ -3,7 +3,7 @@
 **Module:** M2 — Exam Registration & Access
 **Primary actors:** Student, Teacher
 **Primary surface:** Shared web application
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 11, 14; `docs/LOW_LEVEL_DESIGN.md` §§10, 17; `docs/modules/MODULE_DECOMPOSITION.md` §§2–4; `docs/modules/SCREEN_INVENTORY.md` §6
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 11, 14; `docs/architecture/LOW_LEVEL_DESIGN.md` §§10, 17; `docs/modules/MODULE_DECOMPOSITION.md` §§2–4; `docs/modules/SCREEN_INVENTORY.md` §6
 
 M2 converts a published teacher-owned exam into a server-authorised registration. It owns discovery, policy evaluation, invitations, registration state, and teacher approval. It does not own accounts, exam composition, devices, live sessions, proctoring, grading, or results.
 

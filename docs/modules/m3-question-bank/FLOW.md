@@ -3,7 +3,7 @@
 **Module:** M3 — Question Bank
 **Primary actor:** Teacher
 **Primary surface:** Shared web application
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 12; `docs/LOW_LEVEL_DESIGN.md` §8; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §7
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 12; `docs/architecture/LOW_LEVEL_DESIGN.md` §8; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §7
 
 M3 owns reusable teacher-authored question drafts and immutable versions. It does not own exam sections, timing, registration, answer delivery, grading decisions, or results.
 

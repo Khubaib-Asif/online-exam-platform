@@ -20,8 +20,7 @@
 
 - [ ] Scope is a single module / fix — no unrelated refactors 
 - [ ] No frozen docs modified without an explicit reason stated above
-      (`docs/srs`, `docs/architecture`, `docs/compliance`, `docs/design/UI_GUIDELINES.md`,
-      `docs/HIGH_LEVEL_DESIGN.md`, `docs/LOW_LEVEL_DESIGN.md`, `docs/modules`)
+      (`docs/srs`, `docs/architecture`, `docs/compliance`, `docs/design/UI_GUIDELINES.md`, `docs/modules`)
 - [ ] Follows the relevant LLD section exactly; deviations flagged, not silent
 - [ ] CI is green (docs-lint today; lint/typecheck/tests once code exists)
 - [ ] Linked the relevant issue / module (M1–M8) below

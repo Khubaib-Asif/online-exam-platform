@@ -2,7 +2,7 @@
 
 **Module:** M3 — Question Bank
 **Status:** v1 boundary; no open v1 requirements
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 12; `docs/LOW_LEVEL_DESIGN.md` §8; `docs/modules/MODULE_DECOMPOSITION.md` §3
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 12; `docs/architecture/LOW_LEVEL_DESIGN.md` §8; `docs/modules/MODULE_DECOMPOSITION.md` §3
 
 This file records deliberately deferred capabilities without weakening immutable question-version guarantees.
 

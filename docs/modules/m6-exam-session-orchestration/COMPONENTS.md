@@ -2,7 +2,7 @@
 
 **Module:** M6 — Exam Session Orchestration
 **Primary surface:** Shared web application inside signed Electron
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§5, 12, 16; `docs/LOW_LEVEL_DESIGN.md` §§12–14
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§5, 12, 16; `docs/architecture/LOW_LEVEL_DESIGN.md` §§12–14
 
 ## 1. Live-session components
 

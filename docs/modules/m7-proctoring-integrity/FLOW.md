@@ -3,7 +3,7 @@
 **Module:** M7 — Proctoring & Integrity
 **Primary actors:** Student, Teacher, Proctor if enabled, system/AI workers
 **Primary surfaces:** Evidence originates from the Electron-loaded web application; review uses the shared web application
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 11, 13, 16; `docs/LOW_LEVEL_DESIGN.md` §15; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §11
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 11, 13, 16; `docs/architecture/LOW_LEVEL_DESIGN.md` §15; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §11
 
 M7 ingests and evaluates integrity evidence. It does not become the authority for identity, timing, answer state, grading, or result publication.
 

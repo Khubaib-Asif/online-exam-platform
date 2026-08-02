@@ -2,7 +2,7 @@
 
 **Module:** M4 — Exam Builder & Publication
 **Primary surface:** Shared web application
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 12, 14; `docs/LOW_LEVEL_DESIGN.md` §9; `docs/modules/SCREEN_INVENTORY.md` §8
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 12, 14; `docs/architecture/LOW_LEVEL_DESIGN.md` §9; `docs/modules/SCREEN_INVENTORY.md` §8
 
 This document defines M4-owned authoring and publication components. M6 remains the authority for runtime timing and navigation.
 

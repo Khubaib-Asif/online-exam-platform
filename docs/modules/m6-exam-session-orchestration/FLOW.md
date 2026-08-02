@@ -3,7 +3,7 @@
 **Module:** M6 — Exam Session Orchestration
 **Primary actor:** Student
 **Primary surface:** Shared web application loaded inside the signed Electron shell
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§5, 9, 11, 12, 16; `docs/LOW_LEVEL_DESIGN.md` §§12–14; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §10
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§5, 9, 11, 12, 16; `docs/architecture/LOW_LEVEL_DESIGN.md` §§12–14; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §10
 
 M6 is the server-authoritative execution engine. It owns attempt state, deadlines, navigation, answer persistence, reconnect, and submission. It does not own identity, registration approval, device enrolment, proctoring evidence policy, or final marks.
 

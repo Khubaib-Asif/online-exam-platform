@@ -3,7 +3,7 @@
 **Module:** M5 — Device & Security Gates
 **Primary actor:** Student
 **Primary surfaces:** Shared web application for device management; signed Electron shell plus the same loaded web application URL for attempt entry
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§5, 9, 11, 13, 16; `docs/LOW_LEVEL_DESIGN.md` §§11, 14, 17; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §9
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§5, 9, 11, 13, 16; `docs/architecture/LOW_LEVEL_DESIGN.md` §§11, 14, 17; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §9
 
 M5 separates persistent device registration from per-attempt security gates. It authorises entry; it does not run the exam timer, own answers, or make final proctoring or grading decisions.
 

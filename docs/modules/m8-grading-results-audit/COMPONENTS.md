@@ -2,7 +2,7 @@
 
 **Module:** M8 — Grading, Results & Audit
 **Primary surface:** Shared web application
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 13; `docs/LOW_LEVEL_DESIGN.md` §16; `docs/modules/SCREEN_INVENTORY.md` §12
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 13; `docs/architecture/LOW_LEVEL_DESIGN.md` §16; `docs/modules/SCREEN_INVENTORY.md` §12
 
 ## 1. Grading components
 

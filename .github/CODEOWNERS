@@ -6,8 +6,7 @@
 *                               @Khubaib-Asif
 
 # Frozen, signed-off design sources — the repo owner must approve any change.
-/docs/HIGH_LEVEL_DESIGN.md      @Khubaib-Asif
-/docs/LOW_LEVEL_DESIGN.md       @Khubaib-Asif
+/docs/architecture/             @Khubaib-Asif
 
 # CI/CD and repo governance.
 /.github/                       @Khubaib-Asif

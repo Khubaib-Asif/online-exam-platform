@@ -3,7 +3,7 @@
 **Module:** M4 — Exam Builder & Publication
 **Primary actor:** Teacher
 **Primary surface:** Shared web application
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 11, 12, 14; `docs/LOW_LEVEL_DESIGN.md` §9; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §8
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 11, 12, 14; `docs/architecture/LOW_LEVEL_DESIGN.md` §9; `docs/modules/MODULE_DECOMPOSITION.md` §3; `docs/modules/SCREEN_INVENTORY.md` §8
 
 M4 composes immutable exam revisions from M3 question versions, validates timing and access policy, and publishes the teacher-owned catalogue entry consumed by M2. It does not approve individual registrations, execute attempts, grade answers, or publish results.
 

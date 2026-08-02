@@ -2,7 +2,7 @@
 
 **Module:** M2 — Exam Registration & Access
 **Primary surface:** Shared web application
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§9, 14; `docs/LOW_LEVEL_DESIGN.md` §§10, 17; `docs/modules/SCREEN_INVENTORY.md` §6
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§9, 14; `docs/architecture/LOW_LEVEL_DESIGN.md` §§10, 17; `docs/modules/SCREEN_INVENTORY.md` §6
 
 This document defines M2-owned UI components and application contracts. Detailed database schemas and transport envelope rules remain in the LLD.
 

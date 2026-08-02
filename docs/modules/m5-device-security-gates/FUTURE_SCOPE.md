@@ -2,7 +2,7 @@
 
 **Module:** M5 — Device & Security Gates
 **Status:** v1 boundary; no open v1 requirements
-**Authoritative references:** `docs/HIGH_LEVEL_DESIGN.md` §§5, 13, 16; `docs/LOW_LEVEL_DESIGN.md` §§11, 14
+**Authoritative references:** `docs/architecture/HIGH_LEVEL_DESIGN.md` §§5, 13, 16; `docs/architecture/LOW_LEVEL_DESIGN.md` §§11, 14
 
 ## Deferred capabilities
 

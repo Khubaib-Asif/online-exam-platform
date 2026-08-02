@@ -4,7 +4,7 @@
 **Document Maintainer:** M. Khubaib Asif
 **Version:** 2.0
 **Status:** Current screen authority for the single-platform, Simple Poly-App architecture
-**Related Documents:** `file docs/HIGH_LEVEL_DESIGN.md`, `file docs/LOW_LEVEL_DESIGN.md`, `file docs/modules/MODULE_DECOMPOSITION.md`, `file docs/design/UI_GUIDELINES.md`
+**Related Documents:** `file docs/architecture/HIGH_LEVEL_DESIGN.md`, `file docs/architecture/LOW_LEVEL_DESIGN.md`, `file docs/modules/MODULE_DECOMPOSITION.md`, `file docs/design/UI_GUIDELINES.md`
 
 ---
 
@@ -35,8 +35,8 @@ It does not define component internals, detailed business logic, database schema
 
 - Module behaviour and screen-level flow: each module's `file FLOW.md`;
 - component composition and interaction contracts: each module's `file COMPONENTS.md`;
-- API, schema, state-machine, security, and deployment contracts: `file docs/LOW_LEVEL_DESIGN.md`;
-- system boundaries and quality attributes: `file docs/HIGH_LEVEL_DESIGN.md`; and
+- API, schema, state-machine, security, and deployment contracts: `file docs/architecture/LOW_LEVEL_DESIGN.md`;
+- system boundaries and quality attributes: `file docs/architecture/HIGH_LEVEL_DESIGN.md`; and
 - requirement and acceptance traceability: `docs/srs/`.
 
 ### Inventory rules
