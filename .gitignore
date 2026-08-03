@@ -8,6 +8,7 @@ node_modules/
 
 # Build Outputs
 dist/
+dist-ssr
 dist-electron/
 build/
 out/
@@ -15,9 +16,9 @@ out/
 
 # Environment & Local Secrets
 .env
-.env.local
-.env.*.local
+.env.*
 !.env.example
+*.local
 
 # Editor & OS Metadata
 .DS_Store
