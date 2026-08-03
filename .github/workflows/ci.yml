@@ -88,8 +88,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - name: tsc --noEmit
-        run: npx tsc --noEmit
+      - name: Typecheck
+        run: npm run typecheck
 
   unit-test:
     needs: [ detect, install ]
@@ -162,8 +162,9 @@ jobs:
           echo "Postgres did not become ready in time." >&2
           exit 1
 
-      - name: Apply database migrations
-        run: npx prisma migrate deploy
+      # TODO: Uncomment this when the backend Prisma schema is pushed
+      # - name: Apply database migrations
+      #   run: npx prisma migrate deploy
 
       - name: Integration tests
         run: npm run test:integration
