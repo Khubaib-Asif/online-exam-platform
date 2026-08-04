@@ -1,0 +1,241 @@
+OWNER INTAILIZED 
+
+OWNER LOGIN SuCCESFUL
+
+GET ME
+{
+    "data": {
+        "id": "3e2cb35b-44ad-4d0b-bb5a-26ac1a40d4ab",
+        "email": "owner@exam.com",
+        "firstName": "System",
+        "lastName": "Owner",
+        "role": "OWNER",
+        "status": "ACTIVE",
+        "createdAt": "2026-08-03T19:03:05.532Z",
+        "lastLoginAt": "2026-08-04T06:22:51.455Z"
+    }
+}
+
+Teacher Invitation Created
+{
+    "data": {
+        "invitationId": "dc11365e-d5cf-4b17-91fa-1eca9c166ea1",
+        "email": "teacher1@exam.com",
+        "expiresAt": "2026-08-05T06:27:03.294Z",
+        "invitationToken": "217e5a2763d3fa7f33487227c1dd6c51c6c1c2b0792726c0033180bb9c83ac61"
+    },
+    "message": "Teacher invitation created"
+}
+
+Teacher Account Activation
+{
+    "data": {
+        "id": "b798f0b3-1a26-4e19-9b73-bef0faa51bcc",
+        "email": "teacher1@exam.com",
+        "firstName": "Sarah",
+        "lastName": "Conner",
+        "role": "TEACHER"
+    },
+    "message": "Teacher account activated"
+}
+
+TEACHER LOGGED IN
+{
+    "data": {
+        "user": {
+            "id": "b798f0b3-1a26-4e19-9b73-bef0faa51bcc",
+            "email": "teacher1@exam.com",
+            "firstName": "Sarah",
+            "lastName": "Conner",
+            "role": "TEACHER"
+        },
+        "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiNzk4ZjBiMy0xYTI2LTRlMTktOWI3My1iZWYwZmFhNTFiY2MiLCJyb2xlIjoiVEVBQ0hFUiIsImp0aSI6ImVkNjhhZmRiLWFlYTYtNGY4NS05NjhjLWUxZDc0ZGM4MzA5ZSIsImlhdCI6MTc4NTgyNTIyNCwiZXhwIjoxNzg1ODI2MTI0fQ.m6YrbD5LPEvqPEhbWrnTtwToBuFni-5gDEVdKuSw2tQ"
+    }
+}
+
+STUDENT REGISTRATION (SELF)
+{
+    "data": {
+        "id": "a47c0e13-1b9f-40a1-8f81-4bc5026012fc",
+        "email": "student1@exam.com",
+        "firstName": "John",
+        "lastName": "Doe",
+        "role": "STUDENT",
+        "createdAt": "2026-08-04T06:34:33.445Z"
+    },
+    "message": "Student registered successfully"
+}
+
+
+STUDENT LOGGED IN
+{
+    "data": {
+        "user": {
+            "id": "a47c0e13-1b9f-40a1-8f81-4bc5026012fc",
+            "email": "student1@exam.com",
+            "firstName": "John",
+            "lastName": "Doe",
+            "role": "STUDENT"
+        },
+        "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhNDdjMGUxMy0xYjlmLTQwYTEtOGY4MS00YmM1MDI2MDEyZmMiLCJyb2xlIjoiU1RVREVOVCIsImp0aSI6IjRkOThhMjM3LThiMmUtNDYxMy1hYWE3LTlhMWJlYWRlOTVhZCIsImlhdCI6MTc4NTgyNTM1NiwiZXhwIjoxNzg1ODI2MjU2fQ.rGzP2tAhRNA_ApGWdIQ5mlxaY0LbE99ROCyGrKWaXvk"
+    }
+}
+
+RESET PASSWORD LINK SEND
+{
+    "data": {
+        "message": "If an account exists, a reset link has been sent.",
+        "resetToken": "e911aa30e10546f28a44739093015652d7bddc8e7b21b1d26bd7216d796d8aa4"
+    }
+}
+
+PASSWORD CHANGED
+{
+    "data": {
+        "message": "Password has been set successfully."
+    }
+}
+{
+  "email": "student1@exam.com",
+  "password": "NewStudentPassword123!"
+}
+
+DEVICE STATS
+{
+  "data": {
+    "devices": [],
+    "activeCount": 0,
+    "maxAllowed": 2
+  }
+}
+
+DEVICE 1 ADDED
+{
+    "data": {
+        "id": "04dd15d1-08aa-4ed0-8c9d-90ee946e2d15",
+        "userId": "a47c0e13-1b9f-40a1-8f81-4bc5026012fc",
+        "publicKeyJwkEncrypted": "web-managed-key",
+        "publicKeyThumbprint": "e033f917e9a6a5b19797259f07d84bc1",
+        "fingerprintHash": "742907f909af686bdc92a0adc43dad3b11212f82fb3c41681284db6e8508f560",
+        "platform": "Windows 11",
+        "appVersion": "1.0.0",
+        "label": "Home Laptop",
+        "status": "ACTIVE",
+        "registeredAt": "2026-08-04T06:56:26.000Z",
+        "lastSeenAt": "2026-08-04T06:56:26.000Z",
+        "lastExamSessionId": null,
+        "revokedAt": null
+    },
+    "message": "Device registered successfully"
+}
+
+DEVICE 2 ADDED
+{
+    "data": {
+        "id": "2fa470ca-2440-4416-b8f7-21fcc4fe2e27",
+        "userId": "a47c0e13-1b9f-40a1-8f81-4bc5026012fc",
+        "publicKeyJwkEncrypted": "web-managed-key",
+        "publicKeyThumbprint": "9723f71b03121e1b422faf32b97d4779",
+        "fingerprintHash": "27f951cd2957279561b82991b58fa4efe4649843bcf5618279bdf3f912552a34",
+        "platform": "macOS 14",
+        "appVersion": "1.0.0",
+        "label": "Office PC",
+        "status": "ACTIVE",
+        "registeredAt": "2026-08-04T06:57:53.272Z",
+        "lastSeenAt": "2026-08-04T06:57:53.272Z",
+        "lastExamSessionId": null,
+        "revokedAt": null
+    },
+    "message": "Device registered successfully"
+}
+
+NO MORE CAPACITY
+{
+    "error": {
+        "code": "DEVICE_LIMIT_EXCEEDED",
+        "message": "Device limit reached (Maximum 2 active devices allowed). Please revoke an existing device first."
+    }
+}
+
+
+DEVICES DATA
+{
+    "data": {
+        "devices": [
+            {
+                "id": "2fa470ca-2440-4416-b8f7-21fcc4fe2e27",
+                "name": "Office PC",
+                "os": "macOS 14",
+                "lastSeen": "2026-08-04T06:57:53.272Z",
+                "isActive": true,
+                "isCurrent": false
+            },
+            {
+                "id": "04dd15d1-08aa-4ed0-8c9d-90ee946e2d15",
+                "name": "Home Laptop",
+                "os": "Windows 11",
+                "lastSeen": "2026-08-04T06:56:26.000Z",
+                "isActive": true,
+                "isCurrent": false
+            }
+        ],
+        "activeCount": 2,
+        "maxAllowed": 2
+    }
+}
+
+DEVICE ONE REVOKED
+
+DEICE 3 ADDED
+{
+    "data": {
+        "id": "0290ba4b-394a-476a-ac72-dea69be1c572",
+        "userId": "a47c0e13-1b9f-40a1-8f81-4bc5026012fc",
+        "publicKeyJwkEncrypted": "web-managed-key",
+        "publicKeyThumbprint": "32755314c191ee9e92f272490333b400",
+        "fingerprintHash": "bf754191735cc9b4ae7807261e4d422393bf5bf3764ed2c50875b719f5779865",
+        "platform": "iPadOS",
+        "appVersion": "1.0.0",
+        "label": "Tablet Device",
+        "status": "ACTIVE",
+        "registeredAt": "2026-08-04T07:02:38.506Z",
+        "lastSeenAt": "2026-08-04T07:02:38.506Z",
+        "lastExamSessionId": null,
+        "revokedAt": null
+    },
+    "message": "Device registered successfully"
+}
+
+FINAL DEVICE INFO
+{
+    "data": {
+        "devices": [
+            {
+                "id": "0290ba4b-394a-476a-ac72-dea69be1c572",
+                "name": "Tablet Device",
+                "os": "iPadOS",
+                "lastSeen": "2026-08-04T07:02:38.506Z",
+                "isActive": true,
+                "isCurrent": false
+            },
+            {
+                "id": "2fa470ca-2440-4416-b8f7-21fcc4fe2e27",
+                "name": "Office PC",
+                "os": "macOS 14",
+                "lastSeen": "2026-08-04T06:57:53.272Z",
+                "isActive": true,
+                "isCurrent": false
+            },
+            {
+                "id": "04dd15d1-08aa-4ed0-8c9d-90ee946e2d15",
+                "name": "Home Laptop",
+                "os": "Windows 11",
+                "lastSeen": "2026-08-04T06:56:26.000Z",
+                "isActive": false,
+                "isCurrent": false
+            }
+        ],
+        "activeCount": 2,
+        "maxAllowed": 2
+    }
+}
