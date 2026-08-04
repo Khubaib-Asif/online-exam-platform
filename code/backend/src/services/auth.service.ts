@@ -259,27 +259,67 @@ export class AuthService {
       where: { email: email.toLowerCase() },
     });
 
-    // Always return safe success to avoid email enumeration
     if (!user) {
       return { message: 'If an account exists, a reset link has been sent.' };
     }
 
-    const resetToken = crypto.randomBytes(32).toString('hex');
+    // Generate a 32-byte secure reset token
+    const resetTokenRaw = crypto.randomBytes(32).toString('hex');
+    const resetTokenHash = sha256(resetTokenRaw);
+
+    // Save token hash to user record or refresh token table
+    // For password reset, we can store resetTokenHash in RefreshToken table or user reset token
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes TTL
+
+    await prisma.refreshToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: resetTokenHash,
+        familyId: 'PASSWORD_RESET',
+        expiresAt,
+      },
+    });
 
     // Send real email in background
-    EmailService.sendPasswordReset(user.email, resetToken).catch(console.error);
-    
-    // In production, token hash is stored and email sent via mail provider
+    EmailService.sendPasswordReset(user.email, resetTokenRaw).catch(console.error);
+
     return {
       message: 'If an account exists, a reset link has been sent.',
-      resetToken, // Returned in dev mode
+      resetToken: resetTokenRaw, // Useful for testing in dev mode
     };
   }
 
-  // 8. Reset Password
+  // 8. Real Reset Password (Updates DB)
   static async resetPassword(token: string, newPassword: string) {
-    // Hashes new password and updates user
+    const tokenHash = sha256(token);
+
+    const resetRecord = await prisma.refreshToken.findUnique({
+      where: { tokenHash },
+    });
+
+    if (!resetRecord || resetRecord.familyId !== 'PASSWORD_RESET' || resetRecord.expiresAt < new Date() || resetRecord.revokedAt) {
+      throw new AppError(400, 'Invalid or expired password reset token', 'INVALID_RESET_TOKEN');
+    }
+
     const passwordHash = await hashPassword(newPassword);
+
+    // Transactionally update password and revoke reset token
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: resetRecord.userId },
+        data: {
+          passwordHash,
+          passwordChangedAt: new Date(),
+        },
+      });
+
+      // Mark reset token as used (revoked)
+      await tx.refreshToken.update({
+        where: { id: resetRecord.id },
+        data: { revokedAt: new Date() },
+      });
+    });
+
     return { message: 'Password has been set successfully.' };
   }
 
