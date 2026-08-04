@@ -1,0 +1,669 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  OWNER
+  TEACHER
+  STUDENT
+  PROCTOR
+}
+
+enum AccountStatus {
+  ACTIVE
+  DISABLED
+  PENDING_EMAIL
+}
+
+enum ExamStatus {
+  DRAFT
+  PUBLISHED
+  ACTIVE
+  CLOSED
+  ARCHIVED
+}
+
+enum ExamRevisionStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
+enum AccessPolicy {
+  PUBLIC
+  INVITATION_ONLY
+  APPROVAL_REQUIRED
+}
+
+enum RegistrationStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+enum DeviceStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum SessionStatus {
+  PENDING
+  ENTRY_GATES
+  ACTIVE
+  PAUSED_RECONNECT
+  SUBMITTED
+  AUTO_SUBMITTED
+  TERMINATED
+  GRADING
+  GRADED
+  PUBLISHED
+}
+
+enum TimingMode {
+  WHOLE_PAPER
+  SECTION_TIMED
+  QUESTION_TIMED
+  MIXED
+}
+
+enum QuestionType {
+  MCQ
+  MSQ
+  TRUE_FALSE
+  SHORT
+  LONG
+}
+
+enum QuestionOutcome {
+  NOT_STARTED
+  ACTIVE
+  SUBMITTED
+  TIMED_OUT
+  SKIPPED_BY_SECTION_TIMEOUT
+  SKIPPED_BY_PAPER_TIMEOUT
+  LOCKED
+}
+
+enum GradeState {
+  NOT_REQUIRED
+  PENDING_AI_REVIEW
+  TEACHER_CONFIRMED
+}
+
+enum GradeSource {
+  SYSTEM
+  AI_SUGGESTION
+  TEACHER
+}
+
+enum FlagType {
+  FACE_MISSING
+  MULTIPLE_FACES
+  GAZE_OFF_SCREEN
+  FORBIDDEN_PROCESS
+  TAB_BLUR
+  COPY_ATTEMPT
+  SECONDARY_VOICE
+  DEVICE_MISMATCH
+  IP_CHANGE
+  WINDOW_RESIZE
+  SCREENSHOT_ATTEMPT
+  CONTEXT_MENU
+  FULLSCREEN_EXIT
+  GATE_FAILURE
+}
+
+enum FlagDecision {
+  OPEN
+  NO_ACTION
+  WARNING_ISSUED
+  ESCALATED
+  TERMINATED
+}
+
+enum RegistrationDecision {
+  AUTO_APPROVED
+  TEACHER_APPROVED
+  TEACHER_REJECTED
+}
+
+enum GateStatus {
+  PASSED
+  FAILED
+  REVIEW_REQUIRED
+}
+
+enum EvidenceType {
+  FACE_FRAME
+  SCREEN_RECORDING
+  AUDIO_SAMPLE
+  NATIVE_REPORT
+  NETWORK_REPORT
+  DOCUMENT
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+enum BootstrapStatus {
+  UNINITIALISED
+  INITIALISED
+}
+
+enum InvitationStatus {
+  ISSUED
+  REDEEMED
+  EXPIRED
+  REVOKED
+}
+
+model User {
+  id                     String        @id @default(uuid())
+  email                  String        @unique @db.VarChar(254)
+  passwordHash           String        @db.VarChar(512)
+  role                   Role
+  status                 AccountStatus @default(PENDING_EMAIL)
+  firstName              String        @db.VarChar(64)
+  lastName               String        @db.VarChar(64)
+  biometricRef           String?       @db.VarChar(512)
+  profilePhotoRef        String?       @db.VarChar(512)
+  profilePhotoSha256     String?       @db.VarChar(64)
+  profilePhotoMime       String?       @db.VarChar(32)
+  profilePhotoEnrolledAt DateTime?
+  emailVerifiedAt        DateTime?
+  lastLoginAt            DateTime?
+  failedLoginCount       Int           @default(0)
+  lockedUntil            DateTime?
+  passwordChangedAt      DateTime      @default(now())
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+
+  refreshTokens                RefreshToken[]
+  devices                      Device[]
+  questionBanks                QuestionBank[]
+  exams                        Exam[]              @relation("ExamOwner")
+  registrations                ExamRegistration[]
+  sessions                     ExamSession[]
+  auditEvents                  AuditEvent[]        @relation("AuditActor")
+  grades                       Grade[]             @relation("GradeTeacher")
+  flagsReviewed                ProctoringFlag[]    @relation("FlagReviewer")
+  registrationDecisions        ExamRegistration[]  @relation("RegistrationDecider")
+  teacherInvitationsIssued     TeacherInvitation[] @relation("TeacherInvitationIssuer")
+  teacherInvitationRedemptions TeacherInvitation[] @relation("TeacherInvitationRedeemer")
+  resultsPublished             ResultPublication[] @relation("ResultPublisher")
+
+  @@index([role, status])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique @db.VarChar(64)
+  familyId  String    @db.VarChar(36)
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?   @db.VarChar(512)
+  ipAddress String?   @db.VarChar(45)
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, expiresAt])
+  @@index([familyId])
+}
+
+model Device {
+  id                    String       @id @default(uuid())
+  userId                String
+  publicKeyJwkEncrypted String       @db.Text
+  publicKeyThumbprint   String       @db.VarChar(128)
+  fingerprintHash       String       @db.VarChar(64)
+  platform              String       @db.VarChar(32)
+  appVersion            String       @db.VarChar(32)
+  label                 String?      @db.VarChar(128)
+  status                DeviceStatus @default(ACTIVE)
+  registeredAt          DateTime     @default(now())
+  lastSeenAt            DateTime     @default(now())
+  lastExamSessionId     String?      @db.VarChar(36)
+  revokedAt             DateTime?
+
+  user     User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sessions ExamSession[]
+  gates    SecurityGate[]
+
+  @@unique([userId, publicKeyThumbprint])
+  @@index([userId, status])
+}
+
+model QuestionBank {
+  id          String   @id @default(uuid())
+  ownerId     String
+  name        String   @db.VarChar(256)
+  description String?  @db.VarChar(2000)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner     User       @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  questions Question[]
+
+  @@index([ownerId, updatedAt])
+}
+
+model Question {
+  id        String   @id @default(uuid())
+  bankId    String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bank     QuestionBank      @relation(fields: [bankId], references: [id], onDelete: Restrict)
+  versions QuestionVersion[]
+
+  @@index([bankId, active])
+}
+
+model QuestionVersion {
+  id                  String       @id @default(uuid())
+  questionId          String
+  versionNumber       Int
+  type                QuestionType
+  encryptedContent    String       @db.Text
+  encryptedOptions    String?      @db.Text
+  encryptedAnswerKey  String?      @db.Text
+  encryptedRubric     String?      @db.Text
+  encryptedKeywords   String?      @db.Text
+  referenceSourceRefs Json         @default("[]")
+  marks               Int
+  tags                String[]     @default([])
+  contentHash         String       @db.VarChar(64)
+  createdAt           DateTime     @default(now())
+
+  question      Question       @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  examQuestions ExamQuestion[]
+
+  @@unique([questionId, versionNumber])
+  @@unique([id, contentHash])
+  @@index([questionId, createdAt])
+}
+
+model Exam {
+  id                   String       @id @default(uuid())
+  ownerId              String
+  title                String       @db.VarChar(256)
+  description          String?      @db.VarChar(4000)
+  status               ExamStatus   @default(DRAFT)
+  accessPolicy         AccessPolicy
+  capacity             Int?
+  registrationOpensAt  DateTime
+  registrationClosesAt DateTime
+  startsAt             DateTime
+  closesAt             DateTime
+  publishedAt          DateTime?
+  closedAt             DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  owner         User               @relation("ExamOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  revisions     ExamRevision[]
+  invitations   ExamInvitation[]
+  registrations ExamRegistration[]
+  sessions      ExamSession[]
+
+  @@index([status, registrationOpensAt, registrationClosesAt])
+  @@index([ownerId, status, updatedAt])
+}
+
+model ExamRevision {
+  id                   String             @id @default(uuid())
+  examId               String
+  revisionNumber       Int
+  status               ExamRevisionStatus @default(DRAFT)
+  timingMode           TimingMode
+  paperDurationSeconds Int
+  proctoringPolicy     Json
+  gradingPolicy        Json
+  settings             Json
+  contentHash          String             @db.VarChar(64)
+  publishedAt          DateTime?
+  createdAt            DateTime           @default(now())
+
+  exam          Exam               @relation(fields: [examId], references: [id], onDelete: Restrict)
+  sections      ExamSection[]
+  registrations ExamRegistration[]
+  sessions      ExamSession[]
+
+  @@unique([examId, revisionNumber])
+  @@index([examId, status])
+}
+
+model ExamSection {
+  id              String  @id @default(uuid())
+  revisionId      String
+  title           String  @db.VarChar(256)
+  description     String? @db.VarChar(2000)
+  orderIndex      Int
+  durationSeconds Int?
+
+  revision  ExamRevision   @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  questions ExamQuestion[]
+
+  @@unique([revisionId, orderIndex])
+}
+
+model ExamQuestion {
+  id                String @id @default(uuid())
+  sectionId         String
+  questionVersionId String
+  orderIndex        Int
+  marksOverride     Int?
+  timeLimitSeconds  Int?
+
+  section         ExamSection       @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  questionVersion QuestionVersion   @relation(fields: [questionVersionId], references: [id], onDelete: Restrict)
+  attempts        QuestionAttempt[]
+  grades          Grade[]
+
+  @@unique([sectionId, orderIndex])
+  @@index([questionVersionId])
+}
+
+model ExamInvitation {
+  id              String   @id @default(uuid())
+  examId          String
+  tokenHash       String   @unique @db.VarChar(64)
+  recipientEmail  String?  @db.VarChar(254)
+  recipientUserId String?
+  expiresAt       DateTime
+  maxUses         Int      @default(1)
+  usedCount       Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  exam          Exam               @relation(fields: [examId], references: [id], onDelete: Restrict)
+  registrations ExamRegistration[]
+
+  @@index([examId, expiresAt])
+}
+
+model ExamRegistration {
+  id           String                @id @default(uuid())
+  examId       String
+  userId       String
+  revisionId   String
+  status       RegistrationStatus    @default(REQUESTED)
+  decision     RegistrationDecision?
+  invitationId String?
+  decidedBy    String?
+  requestedAt  DateTime              @default(now())
+  decidedAt    DateTime?
+  approvedAt   DateTime?
+  rejectedAt   DateTime?
+
+  exam       Exam            @relation(fields: [examId], references: [id], onDelete: Restrict)
+  user       User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  revision   ExamRevision    @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  invitation ExamInvitation? @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  decider    User?           @relation("RegistrationDecider", fields: [decidedBy], references: [id], onDelete: Restrict)
+  session    ExamSession?
+
+  @@unique([examId, userId])
+  @@index([examId, status, requestedAt])
+  @@index([userId, status, requestedAt])
+}
+
+model ExamSession {
+  id                   String        @id @default(uuid())
+  examId               String
+  registrationId       String        @unique
+  revisionId           String
+  userId               String
+  deviceId             String
+  status               SessionStatus @default(PENDING)
+  contentHashAtStart   String        @db.VarChar(64)
+  shuffleSeed          String        @db.VarChar(64)
+  currentQuestionIndex Int           @default(0)
+  currentSectionIndex  Int           @default(0)
+  paperDeadline        DateTime
+  sectionDeadline      DateTime?
+  questionDeadline     DateTime?
+  reconnectCount       Int           @default(0)
+  reconnectDeadline    DateTime?
+  clientSequence       Int           @default(0)
+  riskScore            Int           @default(0)
+  startedAt            DateTime?
+  pausedAt             DateTime?
+  submittedAt          DateTime?
+  terminatedAt         DateTime?
+  terminalReason       String?       @db.VarChar(128)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  exam              Exam               @relation(fields: [examId], references: [id], onDelete: Restrict)
+  registration      ExamRegistration   @relation(fields: [registrationId], references: [id], onDelete: Restrict)
+  revision          ExamRevision       @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  user              User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  device            Device             @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  attempts          QuestionAttempt[]
+  gates             SecurityGate[]
+  events            ProctoringEvent[]
+  flags             ProctoringFlag[]
+  grades            Grade[]
+  resultPublication ResultPublication?
+
+  @@index([examId, status])
+  @@index([userId, status])
+}
+
+model QuestionAttempt {
+  id                String          @id @default(uuid())
+  sessionId         String
+  examQuestionId    String
+  orderIndexAtStart Int
+  outcome           QuestionOutcome @default(NOT_STARTED)
+  activeAt          DateTime?
+  terminalAt        DateTime?
+  encryptedAnswer   String?         @db.Text
+  answerHash        String?         @db.VarChar(64)
+  timeSpentMs       Int             @default(0)
+  attemptSequence   Int             @default(0)
+
+  session      ExamSession  @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  examQuestion ExamQuestion @relation(fields: [examQuestionId], references: [id], onDelete: Restrict)
+
+  @@unique([sessionId, examQuestionId])
+  @@unique([sessionId, orderIndexAtStart])
+  @@index([sessionId, outcome])
+}
+
+model SecurityGate {
+  id           String     @id @default(uuid())
+  sessionId    String
+  deviceId     String
+  gateName     String     @db.VarChar(64)
+  status       GateStatus
+  evidenceRef  String?    @db.VarChar(512)
+  evidenceHash String?    @db.VarChar(64)
+  reasonCode   String?    @db.VarChar(64)
+  evaluatedAt  DateTime   @default(now())
+
+  session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  device  Device      @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+
+  @@index([sessionId, gateName])
+}
+
+model ProctoringEvent {
+  id         String   @id @default(uuid())
+  sessionId  String
+  eventId    String   @unique @db.VarChar(64)
+  eventType  String   @db.VarChar(64)
+  occurredAt DateTime
+  receivedAt DateTime @default(now())
+  metadata   Json     @default("{}")
+  riskDelta  Int      @default(0)
+
+  session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+
+  @@index([sessionId, occurredAt])
+}
+
+model ProctoringFlag {
+  id         String       @id @default(uuid())
+  sessionId  String
+  flagType   FlagType
+  confidence Decimal      @db.Decimal(5, 4)
+  decision   FlagDecision @default(OPEN)
+  reviewedBy String?
+  reviewNote String?      @db.VarChar(2000)
+  createdAt  DateTime     @default(now())
+  reviewedAt DateTime?
+
+  session  ExamSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  reviewer User?       @relation("FlagReviewer", fields: [reviewedBy], references: [id], onDelete: Restrict)
+
+  @@index([sessionId, decision, createdAt])
+}
+
+model Grade {
+  id                 String       @id @default(uuid())
+  sessionId          String
+  examQuestionId     String
+  maxScore           Decimal      @db.Decimal(8, 2)
+  score              Decimal?     @db.Decimal(8, 2)
+  state              GradeState
+  source             GradeSource?
+  aiSuggestedScore   Decimal?     @db.Decimal(8, 2)
+  aiConfidence       Decimal?     @db.Decimal(5, 4)
+  encryptedReasoning String?      @db.Text
+  evidenceRefs       Json         @default("[]")
+  teacherId          String?
+  confirmedAt        DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  session      ExamSession    @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  examQuestion ExamQuestion   @relation(fields: [examQuestionId], references: [id], onDelete: Restrict)
+  teacher      User?          @relation("GradeTeacher", fields: [teacherId], references: [id], onDelete: Restrict)
+  history      GradeHistory[]
+
+  @@unique([sessionId, examQuestionId])
+  @@index([sessionId, state])
+}
+
+model GradeHistory {
+  id            String      @id @default(uuid())
+  gradeId       String
+  sessionId     String
+  previousScore Decimal?    @db.Decimal(8, 2)
+  newScore      Decimal?    @db.Decimal(8, 2)
+  source        GradeSource
+  actorId       String?
+  encryptedNote String?     @db.Text
+  recordHash    String      @db.VarChar(64)
+  previousHash  String?     @db.VarChar(64)
+  createdAt     DateTime    @default(now())
+
+  grade Grade @relation(fields: [gradeId], references: [id], onDelete: Restrict)
+
+  @@index([sessionId, createdAt])
+}
+
+model ResultPublication {
+  id          String   @id @default(uuid())
+  sessionId   String   @unique
+  publishedBy String
+  publishedAt DateTime @default(now())
+  resultHash  String   @db.VarChar(64)
+
+  session   ExamSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  publisher User        @relation("ResultPublisher", fields: [publishedBy], references: [id], onDelete: Restrict)
+}
+
+model IdempotencyRecord {
+  id             String   @id @default(uuid())
+  actorId        String
+  key            String   @db.VarChar(128)
+  requestHash    String   @db.VarChar(64)
+  responseStatus Int
+  responseBody   Json
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  @@unique([actorId, key])
+  @@index([expiresAt])
+}
+
+model OutboxEvent {
+  id            String       @id @default(uuid())
+  topic         String       @db.VarChar(128)
+  aggregateType String       @db.VarChar(64)
+  aggregateId   String       @db.VarChar(36)
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  attempts      Int          @default(0)
+  availableAt   DateTime     @default(now())
+  publishedAt   DateTime?
+  createdAt     DateTime     @default(now())
+
+  @@index([status, availableAt])
+  @@index([aggregateType, aggregateId])
+}
+
+model AuditEvent {
+  id           String   @id @default(uuid())
+  actorId      String?
+  action       String   @db.VarChar(128)
+  resourceType String   @db.VarChar(64)
+  resourceId   String?  @db.VarChar(36)
+  sessionId    String?
+  deviceId     String?
+  metadata     Json     @default("{}")
+  ipAddress    String?  @db.VarChar(45)
+  userAgent    String?  @db.VarChar(512)
+  previousHash String?  @db.VarChar(64)
+  recordHash   String   @db.VarChar(64)
+  createdAt    DateTime @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([resourceType, resourceId, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model PlatformState {
+  id                  Int             @id @default(1)
+  bootstrapStatus     BootstrapStatus @default(UNINITIALISED)
+  bootstrapConsumedAt DateTime?
+  bootstrapRecordHash String?         @db.VarChar(64)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+}
+
+model TeacherInvitation {
+  id             String           @id @default(uuid())
+  email          String           @db.VarChar(254)
+  tokenHash      String           @unique @db.VarChar(64)
+  issuedBy       String
+  role           Role             @default(TEACHER)
+  status         InvitationStatus @default(ISSUED)
+  expiresAt      DateTime
+  redeemedAt     DateTime?
+  revokedAt      DateTime?
+  redeemedUserId String?
+  createdAt      DateTime         @default(now())
+
+  issuer       User  @relation("TeacherInvitationIssuer", fields: [issuedBy], references: [id], onDelete: Restrict)
+  redeemedUser User? @relation("TeacherInvitationRedeemer", fields: [redeemedUserId], references: [id], onDelete: Restrict)
+
+  @@index([email, status, expiresAt])
+  @@index([issuedBy, createdAt])
+}
