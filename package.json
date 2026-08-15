@@ -12,5 +12,8 @@
     "test:unit": "echo 'No isolated unit tests yet, skipping...' && exit 0",
     "test:integration": "npx vitest run code/frontend/integration-tests",
     "build": "npm run build --workspace=code/frontend && npm run build --workspace=code/backend"
+  },
+  "dependencies": {
+    "ts-api-utils": "2.0.1"
   }
 }

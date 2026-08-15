@@ -285,12 +285,11 @@ const ResetPasswordGuard: React.FC<{ children: React.ReactNode }> = ({ children 
 const DashboardDispatcher: React.FC = () => {
     const { user } = useAppSelector((state) => state.auth);
 
-    if (!user) return <Navigate to="/login" replace />;
-
-    // Pre-fetch device data for students
     useGetDevicesQuery(undefined, {
-        skip: user.role !== "STUDENT",
+        skip: !user || user.role !== "STUDENT",
     });
+
+    if (!user) return <Navigate to="/login" replace />;
 
     switch (user.role) {
         case "OWNER":
@@ -304,6 +303,7 @@ const DashboardDispatcher: React.FC = () => {
             return <StudentDashboardScreen />;
     }
 };
+
 
 /**
  * DeviceRegistrationWrapper - Ensures students have registered devices
