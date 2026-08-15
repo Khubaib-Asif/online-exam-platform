@@ -149,7 +149,7 @@ flowchart TD
     %% ── Cross-device cap-resolution loop ──
     CAPBLOCK -.->|switch to a registered device| MYDEV[My Devices]:::screen
     MYDEV --> REVOKE{Revoke a device<br/>DELETE /devices/:id}
-    REVOKE -->|"slot freed"|    SLOTFREE([Slot freed<br/>server accepts retry on new device]):::term
+    REVOKE -->|"slot freed"|SLOTFREE([Slot freed<br/>server accepts retry on new device]):::term
     SLOTFREE -.->|switch back to the new device, retry| REGDEV
 
     %% ═════════════════════════════════════════════
