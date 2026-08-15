@@ -15,7 +15,6 @@ export default defineConfig({
             '@features': path.resolve(import.meta.dirname, './src/features'),
             '@components': path.resolve(import.meta.dirname, './src/components'),
             '@redux': path.resolve(import.meta.dirname, './src/redux'),
-
         },
     },
 })
