@@ -14,12 +14,12 @@ app.use('/v1', apiRouter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+    res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
 // Global Error Handler Middleware
 app.use(errorHandler);
 
 app.listen(env.PORT, () => {
-  console.log(`Server running on http://localhost:${env.PORT}`);
+    console.log(`Server running on http://localhost:${env.PORT}`);
 });
