@@ -2,32 +2,48 @@ import React, { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { AppLayout } from "@components/layout/AppLayout";
 import { Button } from "@components/ui/Button";
-import { Input } from "@components/ui/Input";
-import { UserCheck, ArrowLeft, Send, CheckCircle2 } from "lucide-react";
+import { UserCheck, ArrowLeft, Send, CheckCircle2, AlertCircle } from "lucide-react";
+import {
+  useGetExamDetailsQuery,
+  useRegisterForExamMutation,
+} from "@/redux/services/registrationApi";
 
 export const RegistrationRequestScreen: React.FC = () => {
   const { examId } = useParams<{ examId: string }>();
   const navigate = useNavigate();
+  const targetExamId = examId || "";
+
+  const { data: apiDetails } = useGetExamDetailsQuery(targetExamId, { skip: !targetExamId });
+  const [registerForExam, { isLoading: isSubmitting }] = useRegisterForExamMutation();
 
   const [studentNotes, setStudentNotes] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const teacherName = apiDetails?.teacherName || "Instructor";
+  const examTitle = apiDetails?.title || "Examination";
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
+    if (!targetExamId) return;
+    setError(null);
+
+    try {
+      await registerForExam(targetExamId).unwrap();
       setIsSubmitted(true);
-    }, 700);
+    } catch (err: any) {
+      console.error("Registration request error:", err);
+      const msg = err.data?.message || err.message || "Failed to submit registration request.";
+      setError(msg);
+    }
   };
 
   return (
-    <AppLayout pageTitle={`Request Registration — ${examId}`}>
+    <AppLayout pageTitle={`Request Registration — ${examTitle}`}>
       <div className="max-w-xl mx-auto flex flex-col gap-6">
         <div>
           <button
-            onClick={() => navigate(`/exam/${examId || "ex-401"}`)}
+            onClick={() => navigate(`/exam/${targetExamId}`)}
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
@@ -45,10 +61,17 @@ export const RegistrationRequestScreen: React.FC = () => {
                 Submit Registration Request
               </h1>
               <p className="text-xs text-slate-500">
-                This examination requires explicit instructor approval.
+                This examination requires explicit instructor approval before launch.
               </p>
             </div>
           </div>
+
+          {error && (
+            <div className="p-3 mb-4 bg-red-50 border border-red-200 rounded-md text-xs text-red-800 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
 
           {isSubmitted ? (
             <div className="bg-amber-50 border border-amber-200 rounded-md p-5 text-center flex flex-col items-center gap-3 my-4">
@@ -58,13 +81,13 @@ export const RegistrationRequestScreen: React.FC = () => {
                   Request Submitted Successfully!
                 </h3>
                 <p className="text-xs text-amber-800 mt-1 max-w-sm">
-                  Your request has been routed to <strong>Dr. Sarah Jenkins</strong> for review. You will be notified once a decision is recorded.
+                  Your request has been routed to <strong>{teacherName}</strong> for review. You will be able to launch the paper once your request is approved.
                 </p>
               </div>
               <Button
                 variant="primary"
                 size="sm"
-                onClick={() => navigate(`/exam/${examId || "ex-401"}/status`)}
+                onClick={() => navigate(`/exam/${targetExamId}/status`)}
               >
                 View Request Status
               </Button>
@@ -73,10 +96,10 @@ export const RegistrationRequestScreen: React.FC = () => {
             <form onSubmit={handleSubmit} className="flex flex-col gap-4 mt-2">
               <div className="bg-slate-50 p-4 rounded-md border border-slate-200/80 text-xs text-slate-700">
                 <div className="font-semibold text-slate-900 mb-1">
-                  Target Exam: CS 401 — Distributed Systems & Architecture
+                  Target Exam: {examTitle}
                 </div>
                 <div className="text-slate-500">
-                  Instructor: Dr. Sarah Jenkins • Registration Policy: Approval Required
+                  Instructor: <span className="font-medium text-slate-800">{teacherName}</span> • Registration Policy: Approval Required
                 </div>
               </div>
 
@@ -88,7 +111,7 @@ export const RegistrationRequestScreen: React.FC = () => {
                   rows={4}
                   value={studentNotes}
                   onChange={(e) => setStudentNotes(e.target.value)}
-                  placeholder="e.g. Enrolled in Section 01, requesting exam seating access..."
+                  placeholder="e.g. Enrolled in class section, requesting exam seating access..."
                   className="w-full text-xs p-3 border border-slate-300 rounded-md focus:ring-2 focus:ring-[#4C70A6]/30 focus:border-[#4C70A6] outline-none"
                 />
               </div>

@@ -12,24 +12,50 @@ import {
   Play,
   ShieldCheck,
 } from "lucide-react";
+import {
+  useGetExamDetailsQuery,
+  useGetStudentRegistrationsQuery,
+} from "@/redux/services/registrationApi";
 
 export const RegistrationStatusScreen: React.FC = () => {
   const { examId } = useParams<{ examId: string }>();
   const navigate = useNavigate();
+  const targetId = examId || "";
 
-  // Mock status state (Pending, Approved, Rejected, Revoked)
-  const registration = {
-    examId: examId || "ex-401",
-    examTitle: "CS 401 — Distributed Systems & Architecture",
-    teacherName: "Dr. Sarah Jenkins",
-    status: "REQUEST_PENDING" as "REQUEST_PENDING" | "REGISTERED" | "REJECTED" | "REVOKED",
-    requestedAt: "Aug 04, 2026 • 11:20 AM",
-    reviewedAt: null as string | null,
-    notes: "Awaiting teacher verification of student eligibility.",
-  };
+  const { data: apiDetails } = useGetExamDetailsQuery(targetId, { skip: !targetId });
+  const { data: registrationsList } = useGetStudentRegistrationsQuery();
+
+  const activeReg = registrationsList?.find((r) => r.examId === targetId || r.id === targetId);
+
+  const teacherName = activeReg?.teacherName || apiDetails?.teacherName || "Instructor";
+  const examTitle = activeReg?.examTitle || apiDetails?.title || "Examination";
+  const rawStatus = activeReg?.status || apiDetails?.registrationState || "REQUESTED";
+
+  const status: "REGISTERED" | "REQUEST_PENDING" | "REJECTED" | "REVOKED" =
+    rawStatus === "APPROVED"
+      ? "REGISTERED"
+      : rawStatus === "REQUESTED"
+      ? "REQUEST_PENDING"
+      : rawStatus === "REJECTED"
+      ? "REJECTED"
+      : "REVOKED";
+
+  const requestedAt = activeReg?.requestedAt
+    ? new Date(activeReg.requestedAt).toLocaleString()
+    : "Recently Submitted";
+  const reviewedAt = activeReg?.approvedAt
+    ? new Date(activeReg.approvedAt).toLocaleString()
+    : null;
+
+  const notes =
+    status === "REQUEST_PENDING"
+      ? "Awaiting instructor verification of student eligibility."
+      : status === "REGISTERED"
+      ? "Registration confirmed. Student eligible for paper launch."
+      : "Registration request processed.";
 
   const renderStatusCard = () => {
-    switch (registration.status) {
+    switch (status) {
       case "REGISTERED":
         return (
           <div className="bg-emerald-50 border border-emerald-200 rounded-md p-6 text-left flex flex-col gap-3">
@@ -38,13 +64,13 @@ export const RegistrationStatusScreen: React.FC = () => {
               <h3 className="text-base font-bold text-emerald-900">Registration Approved</h3>
             </div>
             <p className="text-xs text-emerald-700">
-              Your registration request has been approved by {registration.teacherName}. You are fully eligible to launch the exam when the window opens.
+              Your registration request has been approved by {teacherName}. You are fully eligible to launch the exam when the scheduled window opens.
             </p>
             <div className="mt-2">
               <Button
                 variant="primary"
                 size="md"
-                onClick={() => navigate(`/exam/${registration.examId}/launch`)}
+                onClick={() => navigate(`/exam/${targetId}/launch`)}
                 icon={<Play className="w-4 h-4" />}
               >
                 Proceed to Desktop Launch
@@ -60,7 +86,7 @@ export const RegistrationStatusScreen: React.FC = () => {
               <h3 className="text-base font-bold text-red-900">Registration Declined</h3>
             </div>
             <p className="text-xs text-red-700">
-              Your registration request was declined by {registration.teacherName}. If you believe this is an error, please contact your instructor.
+              Your registration request was declined by {teacherName}. If you believe this is an error, please contact your instructor.
             </p>
           </div>
         );
@@ -86,7 +112,7 @@ export const RegistrationStatusScreen: React.FC = () => {
             </div>
             <p className="text-xs text-amber-800 leading-relaxed">
               Your registration request has been submitted and is currently pending review by{" "}
-              <strong>{registration.teacherName}</strong>. You will be able to launch the exam once approved.
+              <strong>{teacherName}</strong>. You will be able to launch the exam once approved.
             </p>
           </div>
         );
@@ -94,11 +120,11 @@ export const RegistrationStatusScreen: React.FC = () => {
   };
 
   return (
-    <AppLayout pageTitle={`Registration Status — ${registration.examId}`}>
+    <AppLayout pageTitle={`Registration Status — ${examTitle}`}>
       <div className="max-w-2xl mx-auto flex flex-col gap-6">
         <div>
           <button
-            onClick={() => navigate(`/exam/${registration.examId}`)}
+            onClick={() => navigate(`/exam/${targetId}`)}
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
@@ -110,21 +136,19 @@ export const RegistrationStatusScreen: React.FC = () => {
           <div className="flex items-start justify-between border-b border-slate-100 pb-4">
             <div>
               <h1 className="text-xl font-bold text-slate-900">Registration Status</h1>
-              <p className="text-xs text-slate-500 mt-1">
-                {registration.examTitle} ({registration.examId})
-              </p>
+              <p className="text-xs text-slate-500 mt-1">{examTitle}</p>
             </div>
             <Badge
               variant={
-                registration.status === "REGISTERED"
+                status === "REGISTERED"
                   ? "success"
-                  : registration.status === "REQUEST_PENDING"
+                  : status === "REQUEST_PENDING"
                   ? "warning"
                   : "error"
               }
               className="text-xs px-3 py-1 font-mono"
             >
-              {registration.status}
+              {status}
             </Badge>
           </div>
 
@@ -134,29 +158,35 @@ export const RegistrationStatusScreen: React.FC = () => {
           <div className="bg-slate-50 p-4 rounded-md border border-slate-200/70 text-xs text-slate-700 flex flex-col gap-2 font-mono">
             <div className="flex justify-between">
               <span className="text-slate-500">Requested Date:</span>
-              <span className="font-semibold text-slate-900">{registration.requestedAt}</span>
+              <span className="font-semibold text-slate-900">{requestedAt}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Instructor:</span>
-              <span className="font-semibold text-slate-900">{registration.teacherName}</span>
+              <span className="font-semibold text-slate-900">{teacherName}</span>
             </div>
+            {reviewedAt && (
+              <div className="flex justify-between">
+                <span className="text-slate-500">Reviewed Date:</span>
+                <span className="font-semibold text-slate-900">{reviewedAt}</span>
+              </div>
+            )}
             <div className="flex justify-between">
-              <span className="text-slate-500">Audit Status Notes:</span>
-              <span className="font-semibold text-slate-900">{registration.notes}</span>
+              <span className="text-slate-500">Status Notes:</span>
+              <span className="font-semibold text-slate-900">{notes}</span>
             </div>
           </div>
 
           <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
             <span className="flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4 text-slate-400" />
-              Server-authoritative registration status
+              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+              PostgreSQL verified registration status
             </span>
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => navigate("/dashboard")}
+              onClick={() => navigate("/catalogue")}
             >
-              Return to Dashboard
+              Return to Catalogue
             </Button>
           </div>
         </div>

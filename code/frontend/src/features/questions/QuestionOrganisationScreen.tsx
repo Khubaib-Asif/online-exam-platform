@@ -5,27 +5,61 @@ import { Button } from "@components/ui/Button";
 import { Input } from "@components/ui/Input";
 import { Badge } from "@components/ui/Badge";
 import { Tag, Plus, Trash2, ArrowLeft, Archive, Check } from "lucide-react";
+import { useGetQuestionBanksQuery, useGetBankQuestionsQuery, useDeleteTagMutation } from "@/redux/services/questionBankApi";
 
 export const QuestionOrganisationScreen: React.FC = () => {
   const navigate = useNavigate();
-  const [tags, setTags] = useState([
-    { name: "Distributed Systems", count: 14 },
-    { name: "Consensus", count: 8 },
-    { name: "Calculus", count: 12 },
-    { name: "Quantum Mechanics", count: 5 },
-    { name: "Transactions", count: 9 },
-  ]);
+  const { data: banksData } = useGetQuestionBanksQuery();
+  const activeBankId = banksData?.[0]?.id || "qb-default";
+
+  const { data: apiQuestions, refetch: refetchQuestions } = useGetBankQuestionsQuery(
+    { bankId: activeBankId },
+    { skip: !banksData || banksData.length === 0 }
+  );
+
+  const [deleteTagApi] = useDeleteTagMutation();
+
+  const [customTags, setCustomTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState("");
+
+  // Aggregate real tag counts from all live questions in database
+  const liveTagCountsMap: Record<string, number> = {};
+  if (apiQuestions) {
+    apiQuestions.forEach((q) => {
+      if (q.tags && Array.isArray(q.tags)) {
+        q.tags.forEach((t) => {
+          liveTagCountsMap[t] = (liveTagCountsMap[t] || 0) + 1;
+        });
+      }
+    });
+  }
+
+  // Merge custom tags with live database tags
+  const allTagNames = Array.from(new Set([...Object.keys(liveTagCountsMap), ...customTags]));
+  const tagList = allTagNames.map((name) => ({
+    name,
+    count: liveTagCountsMap[name] || 0,
+  }));
 
   const handleAddTag = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTag.trim()) return;
-    setTags([...tags, { name: newTag.trim(), count: 0 }]);
+    setCustomTags([...customTags, newTag.trim()]);
     setNewTag("");
   };
 
-  const handleRemoveTag = (name: string) => {
-    setTags(tags.filter((t) => t.name !== name));
+  const handleRemoveTag = async (name: string) => {
+    if (!window.confirm(`Are you sure you want to delete tag "${name}"? This will remove it from all questions in your question bank.`)) {
+      return;
+    }
+    try {
+      await deleteTagApi(name).unwrap();
+      setCustomTags(customTags.filter((t) => t !== name));
+      refetchQuestions();
+    } catch (err: any) {
+      console.error("Delete tag error:", err);
+      alert("Failed to delete tag from questions.");
+    }
   };
 
   return (
@@ -72,11 +106,11 @@ export const QuestionOrganisationScreen: React.FC = () => {
           {/* Active Tags Grid */}
           <div className="flex flex-col gap-3">
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-              Active Question Tags ({tags.length})
+              Active Question Tags ({tagList.length})
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {tags.map((t) => (
+              {tagList.map((t) => (
                 <div
                   key={t.name}
                   className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-md text-xs font-medium text-slate-800"

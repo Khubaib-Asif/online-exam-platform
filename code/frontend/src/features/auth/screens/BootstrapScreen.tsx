@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { useAppSelector } from "@redux/hooks";
+import { useAppDispatch } from "@redux/hooks";
+import { setAuth, setBootstrapStatus } from "@redux/slices/authSlice";
+import { useCreateOwnerMutation } from "@/redux/services/bootstrapApi";
 import { CredentialPanel } from "@components/credential-panel/CredentialPanel";
 import { Input } from "@components/ui/Input";
 import { Button } from "@components/ui/Button";
@@ -8,8 +10,8 @@ import { Shield, Key, User, Mail, Lock, ArrowLeft } from "lucide-react";
 
 export const BootstrapScreen: React.FC = () => {
     const navigate = useNavigate();
-    const { setAuth, setBootstrapStatus } = useAppSelector((state) => state.auth);
-    const [isLoading, setIsLoading] = useState(false);
+    const dispatch = useAppDispatch();
+    const [createOwner, { isLoading }] = useCreateOwnerMutation();
     const [error, setError] = useState<string | null>(null);
 
     const [formData, setFormData] = useState({
@@ -25,31 +27,40 @@ export const BootstrapScreen: React.FC = () => {
         if (error) setError(null);
     };
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!formData.firstName || !formData.lastName || !formData.email || !formData.password) {
-            setError("Please fill in all required fields.");
+        if (!formData.deploymentSecret || !formData.firstName || !formData.lastName || !formData.email || !formData.password) {
+            setError("Please fill in all required fields including deployment secret.");
             return;
         }
 
-        setIsLoading(true);
-        // Simulate bootstrap submission
-        setTimeout(() => {
-            setIsLoading(false);
-            setBootstrapStatus("INITIALISED");
-            setAuth({
+        setError(null);
+        try {
+            const response = await createOwner({
+                bootstrapSecret: formData.deploymentSecret,
+                firstName: formData.firstName,
+                lastName: formData.lastName,
+                email: formData.email,
+                password: formData.password,
+            }).unwrap();
+
+            dispatch(setBootstrapStatus("INITIALISED"));
+            dispatch(setAuth({
                 user: {
-                    id: "owner-01",
-                    email: formData.email,
+                    id: response.user?.id || "owner",
+                    email: response.user?.email || formData.email,
                     fullName: `${formData.firstName} ${formData.lastName}`,
                     role: "OWNER",
                     isEmailVerified: true,
                 },
-                accessToken: "mock-owner-access-token",
-                refreshToken: "mock-owner-refresh-token",
-            });
-            navigate("/owner-console");
-        }, 600);
+                accessToken: "",
+                refreshToken: "",
+            }));
+            navigate("/login");
+        } catch (err: any) {
+            console.error("Bootstrap error:", err);
+            setError(err.data?.message || err.message || "Failed to bootstrap owner account.");
+        }
     };
 
     return (

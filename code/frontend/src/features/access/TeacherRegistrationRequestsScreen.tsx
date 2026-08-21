@@ -13,7 +13,12 @@ import {
   Clock,
   ChevronRight,
   UserCheck,
+  RefreshCw,
 } from "lucide-react";
+import {
+  useGetTeacherPendingRequestsQuery,
+  useDecideRegistrationRequestMutation,
+} from "@/redux/services/registrationApi";
 
 export interface TeacherPendingRequest {
   id: string;
@@ -23,59 +28,47 @@ export interface TeacherPendingRequest {
   examId: string;
   examTitle: string;
   requestedAt: string;
-  status: "PENDING" | "APPROVED" | "REJECTED";
+  status: "REQUESTED" | "PENDING" | "APPROVED" | "REJECTED";
 }
-
-const mockRequests: TeacherPendingRequest[] = [
-  {
-    id: "req-101",
-    studentId: "std-901",
-    studentName: "Alex Rivera",
-    studentEmail: "alex.rivera@university.edu",
-    examId: "ex-401",
-    examTitle: "CS 401 — Distributed Systems",
-    requestedAt: "Aug 04, 2026 10:15 AM",
-    status: "PENDING",
-  },
-  {
-    id: "req-102",
-    studentId: "std-902",
-    studentName: "Michael Chen",
-    studentEmail: "m.chen@university.edu",
-    examId: "ex-401",
-    examTitle: "CS 401 — Distributed Systems",
-    requestedAt: "Aug 04, 2026 09:40 AM",
-    status: "PENDING",
-  },
-  {
-    id: "req-103",
-    studentId: "std-903",
-    studentName: "Sophia Patel",
-    studentEmail: "spatel@university.edu",
-    examId: "ex-305",
-    examTitle: "PHYS 305 — Quantum Mechanics",
-    requestedAt: "Aug 03, 2026 04:20 PM",
-    status: "APPROVED",
-  },
-];
 
 export const TeacherRegistrationRequestsScreen: React.FC = () => {
   const navigate = useNavigate();
+  const { data: requestsData, isLoading, refetch } = useGetTeacherPendingRequestsQuery();
+  const [decideRegistrationRequest] = useDecideRegistrationRequestMutation();
   const [searchTerm, setSearchTerm] = useState("");
-  const [requestsList, setRequestsList] = useState(mockRequests);
 
-  const filteredRequests = requestsList.filter(
+  const activeRequests: TeacherPendingRequest[] = (requestsData || []).map((r) => ({
+    id: r.id,
+    studentId: r.studentId,
+    studentName: r.studentName,
+    studentEmail: r.studentEmail,
+    examId: r.examId,
+    examTitle: r.examTitle,
+    requestedAt: new Date(r.requestedAt).toLocaleString(),
+    status: r.status as any,
+  }));
+
+  const handleDecision = async (id: string, decision: "APPROVED" | "REJECTED") => {
+    try {
+      await decideRegistrationRequest({ registrationId: id, decision }).unwrap();
+      refetch();
+    } catch (err: any) {
+      console.error("Decision error:", err);
+      alert(err.data?.message || "Failed to record decision.");
+    }
+  };
+
+  const filteredRequests = activeRequests.filter(
     (req) =>
       req.studentName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       req.examTitle.toLowerCase().includes(searchTerm.toLowerCase()) ||
       req.studentEmail.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleQuickDecision = (id: string, decision: "APPROVED" | "REJECTED") => {
-    setRequestsList((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, status: decision } : r))
-    );
-  };
+  const pendingCount = activeRequests.filter(
+    (r) => r.status === "REQUESTED" || r.status === "PENDING"
+  ).length;
+  const approvedCount = activeRequests.filter((r) => r.status === "APPROVED").length;
 
   return (
     <AppLayout pageTitle="Registration Requests Queue">
@@ -91,6 +84,14 @@ export const TeacherRegistrationRequestsScreen: React.FC = () => {
               Review and act on pending student registration requests for your approval-required examinations.
             </p>
           </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => refetch()}
+            icon={<RefreshCw className="w-3.5 h-3.5 text-slate-500" />}
+          >
+            Refresh
+          </Button>
         </div>
 
         {/* Toolbar */}
@@ -106,10 +107,10 @@ export const TeacherRegistrationRequestsScreen: React.FC = () => {
 
           <div className="flex items-center gap-3 text-xs font-mono text-slate-600">
             <Badge variant="warning">
-              {requestsList.filter((r) => r.status === "PENDING").length} Pending
+              {pendingCount} Pending Review
             </Badge>
             <Badge variant="success">
-              {requestsList.filter((r) => r.status === "APPROVED").length} Approved
+              {approvedCount} Approved
             </Badge>
           </div>
         </div>
@@ -127,84 +128,95 @@ export const TeacherRegistrationRequestsScreen: React.FC = () => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredRequests.length === 0 ? (
+              {isLoading ? (
                 <TableRow>
                   <TableCell colSpan={5} className="text-center py-8 text-slate-500 text-xs">
-                    No registration requests match your criteria.
+                    Loading student registration requests...
+                  </TableCell>
+                </TableRow>
+              ) : filteredRequests.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center py-8 text-slate-500 text-xs">
+                    {activeRequests.length === 0
+                      ? "No registration requests currently pending review."
+                      : "No registration requests match your search filter."}
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredRequests.map((req) => (
-                  <TableRow key={req.id}>
-                    <TableCell>
-                      <div>
-                        <div className="font-semibold text-slate-900">{req.studentName}</div>
-                        <div className="text-xs text-slate-500 font-mono">{req.studentEmail}</div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div>
-                        <div className="font-medium text-slate-800">{req.examTitle}</div>
-                        <div className="text-xs text-slate-400 font-mono">{req.examId}</div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-slate-600">
-                      {req.requestedAt}
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          req.status === "APPROVED"
-                            ? "success"
-                            : req.status === "PENDING"
-                            ? "warning"
-                            : "error"
-                        }
-                      >
-                        {req.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {req.status === "PENDING" ? (
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-                            onClick={() => handleQuickDecision(req.id, "APPROVED")}
-                            icon={<CheckCircle className="w-3.5 h-3.5" />}
-                          >
-                            Approve
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="text-red-700 border-red-200 hover:bg-red-50"
-                            onClick={() => handleQuickDecision(req.id, "REJECTED")}
-                            icon={<XCircle className="w-3.5 h-3.5" />}
-                          >
-                            Reject
-                          </Button>
+                filteredRequests.map((req) => {
+                  const isPending = req.status === "REQUESTED" || req.status === "PENDING";
+                  return (
+                    <TableRow key={req.id}>
+                      <TableCell>
+                        <div>
+                          <div className="font-semibold text-slate-900">{req.studentName}</div>
+                          <div className="text-xs text-slate-500 font-mono">{req.studentEmail}</div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div>
+                          <div className="font-medium text-slate-800">{req.examTitle}</div>
+                          <div className="text-xs text-slate-400 font-mono">{req.examId}</div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-slate-600">
+                        {req.requestedAt}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            req.status === "APPROVED"
+                              ? "success"
+                              : isPending
+                              ? "warning"
+                              : "error"
+                          }
+                        >
+                          {req.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {isPending ? (
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                              onClick={() => handleDecision(req.id, "APPROVED")}
+                              icon={<CheckCircle className="w-3.5 h-3.5" />}
+                            >
+                              Approve
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="text-red-700 border-red-200 hover:bg-red-50"
+                              onClick={() => handleDecision(req.id, "REJECTED")}
+                              icon={<XCircle className="w-3.5 h-3.5" />}
+                            >
+                              Reject
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => navigate(`/registration-requests/${req.id}`)}
+                              icon={<ChevronRight className="w-4 h-4" />}
+                            />
+                          </div>
+                        ) : (
                           <Button
                             variant="ghost"
                             size="sm"
                             onClick={() => navigate(`/registration-requests/${req.id}`)}
-                            icon={<ChevronRight className="w-4 h-4" />}
-                          />
-                        </div>
-                      ) : (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => navigate(`/registration-requests/${req.id}`)}
-                          icon={<UserCheck className="w-3.5 h-3.5 text-slate-500" />}
-                        >
-                          View Detail
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))
+                            icon={<UserCheck className="w-3.5 h-3.5 text-slate-500" />}
+                          >
+                            View Detail
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>

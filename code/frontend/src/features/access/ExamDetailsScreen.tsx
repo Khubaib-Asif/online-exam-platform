@@ -16,42 +16,81 @@ import {
   AlertCircle,
   Play,
   Key,
+  XCircle,
 } from "lucide-react";
+import { useGetExamDetailsQuery, useRegisterForExamMutation } from "@/redux/services/registrationApi";
 
 export const ExamDetailsScreen: React.FC = () => {
   const { examId } = useParams<{ examId: string }>();
   const navigate = useNavigate();
+  const targetId = examId || "";
 
-  const [registrationState, setRegistrationState] = useState<
-    "NOT_REGISTERED" | "REQUEST_PENDING" | "REGISTERED" | "REJECTED"
-  >("NOT_REGISTERED");
+  const { data: apiDetails, refetch: refetchDetails } = useGetExamDetailsQuery(targetId, { skip: !targetId });
+  const [registerForExam, { isLoading: isRegistering }] = useRegisterForExamMutation();
 
-  // Mock exam detail payload
-  const exam = {
-    id: examId || "ex-401",
-    title: "CS 401 — Distributed Systems & Architecture",
-    teacherName: "Dr. Sarah Jenkins",
-    department: "Computer Science",
-    policy: "APPROVAL_REQUIRED" as const, // PUBLIC, INVITATION_ONLY, APPROVAL_REQUIRED
-    durationMinutes: 120,
-    totalQuestions: 45,
-    totalMarks: 100,
-    timingMode: "SECTION_TIMED",
-    startDate: "Aug 10, 2026 • 09:00 AM",
-    endDate: "Aug 10, 2026 • 11:00 AM",
-    registrationWindowEnd: "Aug 09, 2026 • 11:59 PM",
-    description:
-      "Comprehensive examination covering distributed consensus algorithms (Raft, Paxos), vector clocks, fault tolerance, RPC protocols, and state machine replication. Requires signed desktop launcher application.",
-    requirements: [
-      "Signed desktop app (Electron) for lockdown environment",
-      "Two-device registration cap enforced",
-      "Webcam & microphone integrity capture required",
-      "Forward-only question navigation policy",
-    ],
-  };
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleRegisterPublic = () => {
-    setRegistrationState("REGISTERED");
+  const exam = apiDetails
+    ? {
+        id: apiDetails.id,
+        title: apiDetails.title,
+        teacherName: apiDetails.teacherName,
+        department: "Examination Department",
+        policy: apiDetails.accessPolicy as any,
+        durationMinutes: apiDetails.durationMinutes,
+        totalQuestions: apiDetails.totalQuestions,
+        totalMarks: apiDetails.totalMarks,
+        timingMode: apiDetails.timingMode,
+        startDate: new Date(apiDetails.startsAt).toLocaleString(),
+        endDate: new Date(apiDetails.closesAt).toLocaleString(),
+        registrationWindowEnd: apiDetails.registrationClosesAt
+          ? new Date(apiDetails.registrationClosesAt).toLocaleString()
+          : "Open",
+        description: apiDetails.description || "Official examination assessment session.",
+        requirements: [
+          "Signed desktop app (Electron) for lockdown environment",
+          "Two-device registration cap enforced",
+          "Webcam & microphone integrity capture required",
+          "Forward-only question navigation policy",
+        ],
+      }
+    : {
+        id: targetId,
+        title: "CS 401 — Distributed Systems & Architecture",
+        teacherName: "Dr. Sarah Jenkins",
+        department: "Computer Science",
+        policy: "APPROVAL_REQUIRED" as const,
+        durationMinutes: 120,
+        totalQuestions: 45,
+        totalMarks: 100,
+        timingMode: "SECTION_TIMED",
+        startDate: "Aug 10, 2026 • 09:00 AM",
+        endDate: "Aug 10, 2026 • 11:00 AM",
+        registrationWindowEnd: "Aug 09, 2026 • 11:59 PM",
+        description:
+          "Comprehensive examination covering distributed consensus algorithms (Raft, Paxos), vector clocks, fault tolerance, RPC protocols, and state machine replication.",
+        requirements: [
+          "Signed desktop app (Electron) for lockdown environment",
+          "Two-device registration cap enforced",
+          "Webcam & microphone integrity capture required",
+          "Forward-only question navigation policy",
+        ],
+      };
+
+  const currentRegistrationState = apiDetails?.registrationState || "NOT_REGISTERED";
+
+  const handleRegisterPublic = async () => {
+    if (!targetId) return;
+    setErrorMessage(null);
+
+    try {
+      await registerForExam(targetId).unwrap();
+      refetchDetails();
+    } catch (err: any) {
+      console.error("Registration error:", err);
+      const msg = err.data?.message || err.message || "Failed to submit exam registration.";
+      setErrorMessage(msg);
+    }
   };
 
   return (
@@ -76,7 +115,7 @@ export const ExamDetailsScreen: React.FC = () => {
                 <Badge variant="outline" className="font-mono">{exam.id}</Badge>
                 {exam.policy === "PUBLIC" && (
                   <Badge variant="success" className="flex items-center gap-1">
-                    <Globe className="w-3 h-3" /> Public
+                    <Globe className="w-3 h-3" /> Public Access
                   </Badge>
                 )}
                 {exam.policy === "APPROVAL_REQUIRED" && (
@@ -100,11 +139,11 @@ export const ExamDetailsScreen: React.FC = () => {
 
             {/* Registration Action Box */}
             <div className="shrink-0 flex flex-col items-end gap-2">
-              {registrationState === "REGISTERED" && (
+              {currentRegistrationState === "APPROVED" && (
                 <div className="flex flex-col items-end gap-2">
                   <Badge variant="success" className="text-xs py-1 px-3">
                     <CheckCircle2 className="w-3.5 h-3.5 inline mr-1" />
-                    Registration Confirmed
+                    Registration Confirmed (Approved)
                   </Badge>
                   <Button
                     variant="primary"
@@ -118,7 +157,7 @@ export const ExamDetailsScreen: React.FC = () => {
                 </div>
               )}
 
-              {registrationState === "REQUEST_PENDING" && (
+              {currentRegistrationState === "REQUESTED" && (
                 <div className="flex flex-col items-end gap-2">
                   <Badge variant="warning" className="text-xs py-1 px-3">
                     <AlertCircle className="w-3.5 h-3.5 inline mr-1" />
@@ -134,12 +173,19 @@ export const ExamDetailsScreen: React.FC = () => {
                 </div>
               )}
 
-              {registrationState === "NOT_REGISTERED" && (
+              {currentRegistrationState === "REJECTED" && (
+                <Badge variant="danger" className="text-xs py-1 px-3">
+                  Registration Request Rejected
+                </Badge>
+              )}
+
+              {currentRegistrationState === "NOT_REGISTERED" && (
                 <>
                   {exam.policy === "PUBLIC" && (
                     <Button
                       variant="primary"
                       size="md"
+                      isLoading={isRegistering}
                       onClick={handleRegisterPublic}
                     >
                       Register Now
@@ -171,6 +217,16 @@ export const ExamDetailsScreen: React.FC = () => {
               )}
             </div>
           </div>
+
+          {errorMessage && (
+            <div className="p-4 bg-red-50 border border-red-200 rounded-md text-xs text-red-900 flex items-start gap-2.5">
+              <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold">Registration Action Message:</span>
+                <p className="mt-0.5 text-red-800 leading-relaxed">{errorMessage}</p>
+              </div>
+            </div>
+          )}
 
           {/* Exam Specs Grid */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-slate-50/70 p-4 rounded-md border border-slate-200/80">

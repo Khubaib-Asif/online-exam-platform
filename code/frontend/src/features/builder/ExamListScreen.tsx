@@ -1,81 +1,97 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { AppLayout } from "@components/layout/AppLayout";
 import { Badge } from "@components/ui/Badge";
 import { Button } from "@components/ui/Button";
 import { Input } from "@components/ui/Input";
+import { Modal } from "@components/ui/Modal";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@components/ui/Table";
 import {
   BookOpen,
   Plus,
   Search,
   Filter,
-  Clock,
-  Globe,
   Settings,
   Eye,
   Send,
   Share2,
 } from "lucide-react";
+import { useGetTeacherExamsQuery, useCreateExamMutation } from "@/redux/services/examBuilderApi";
 
 export interface TeacherExamItem {
   id: string;
   title: string;
   revision: number;
-  status: "DRAFT" | "VALIDATED" | "PUBLISHED" | "UNPUBLISHED";
+  status: "DRAFT" | "PUBLISHED" | "CLOSED" | "ARCHIVED";
   timingMode: "WHOLE_PAPER" | "SECTION_TIMED" | "QUESTION_TIMED" | "MIXED";
   durationMinutes: number;
-  sectionsCount: number;
   totalQuestions: number;
   policy: "PUBLIC" | "INVITATION_ONLY" | "APPROVAL_REQUIRED";
   updatedAt: string;
 }
 
-const mockExams: TeacherExamItem[] = [
-  {
-    id: "ex-401",
-    title: "CS 401 — Distributed Systems & Architecture",
-    revision: 3,
-    status: "PUBLISHED",
-    timingMode: "SECTION_TIMED",
-    durationMinutes: 120,
-    sectionsCount: 3,
-    totalQuestions: 45,
-    policy: "APPROVAL_REQUIRED",
-    updatedAt: "Aug 02, 2026",
-  },
-  {
-    id: "ex-202",
-    title: "MATH 202 — Advanced Multivariable Calculus",
-    revision: 1,
-    status: "PUBLISHED",
-    timingMode: "WHOLE_PAPER",
-    durationMinutes: 90,
-    sectionsCount: 2,
-    totalQuestions: 30,
-    policy: "PUBLIC",
-    updatedAt: "Jul 25, 2026",
-  },
-  {
-    id: "ex-305",
-    title: "PHYS 305 — Quantum Mechanics Fundamentals",
-    revision: 2,
-    status: "DRAFT",
-    timingMode: "QUESTION_TIMED",
-    durationMinutes: 150,
-    sectionsCount: 4,
-    totalQuestions: 50,
-    policy: "INVITATION_ONLY",
-    updatedAt: "Jul 29, 2026",
-  },
-];
-
 export const ExamListScreen: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { data: apiExams, refetch: refetchExams } = useGetTeacherExamsQuery();
+  const [createExamApi, { isLoading: isCreating }] = useCreateExamMutation();
+
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
 
-  const filteredExams = mockExams.filter((exam) => {
+  // Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [accessPolicy, setAccessPolicy] = useState<"PUBLIC" | "INVITATION_ONLY" | "APPROVAL_REQUIRED">("INVITATION_ONLY");
+  const [timingMode, setTimingMode] = useState<"WHOLE_PAPER" | "SECTION_TIMED" | "QUESTION_TIMED" | "MIXED">("WHOLE_PAPER");
+  const [durationMinutes, setDurationMinutes] = useState<number>(120);
+
+  React.useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("create") === "true") {
+      setIsModalOpen(true);
+    }
+  }, [location.search]);
+
+  const handleCreateExam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim()) return;
+
+    try {
+      const res = await createExamApi({
+        title: title.trim(),
+        description: description.trim() || undefined,
+        accessPolicy,
+        timingMode,
+        paperDurationSeconds: durationMinutes * 60,
+      }).unwrap();
+
+      const createdId = res.data?.id || res.id;
+      setIsModalOpen(false);
+      setTitle("");
+      setDescription("");
+      refetchExams();
+      navigate(`/builder/${createdId}`);
+    } catch (err) {
+      console.error("Create exam error:", err);
+      alert("Failed to create draft exam. Please check input values.");
+    }
+  };
+
+  const examsList: TeacherExamItem[] = (apiExams || []).map((e) => ({
+    id: e.id,
+    title: e.title,
+    revision: e.revisionNumber,
+    status: e.status as any,
+    timingMode: (e.timingMode || "WHOLE_PAPER") as any,
+    durationMinutes: e.durationMinutes || 120,
+    totalQuestions: e.totalQuestions || 0,
+    policy: (e.accessPolicy || "INVITATION_ONLY") as any,
+    updatedAt: new Date(e.updatedAt).toLocaleDateString(),
+  }));
+
+  const filteredExams = examsList.filter((exam) => {
     const matchesSearch = exam.title.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === "ALL" || exam.status === statusFilter;
     return matchesSearch && matchesStatus;
@@ -87,10 +103,10 @@ export const ExamListScreen: React.FC = () => {
         return <Badge variant="success">Published</Badge>;
       case "DRAFT":
         return <Badge variant="warning">Draft</Badge>;
-      case "VALIDATED":
-        return <Badge variant="info">Validated</Badge>;
-      case "UNPUBLISHED":
-        return <Badge variant="default">Unpublished</Badge>;
+      case "CLOSED":
+        return <Badge variant="default">Closed</Badge>;
+      default:
+        return <Badge variant="outline">{status}</Badge>;
     }
   };
 
@@ -105,19 +121,100 @@ export const ExamListScreen: React.FC = () => {
               <span>Exam Builder & Management</span>
             </h1>
             <p className="text-xs text-slate-500 mt-1">
-              Compose sections, configure timing and access policies, and publish immutable revisions.
+              Compose sections, configure timing & access policies, and publish immutable exam papers.
             </p>
           </div>
 
           <Button
             variant="primary"
             size="sm"
-            onClick={() => navigate("/builder/new")}
+            onClick={() => setIsModalOpen(true)}
             icon={<Plus className="w-4 h-4" />}
           >
             Create New Exam
           </Button>
         </div>
+
+        {/* Modal: Create Draft Exam */}
+        <Modal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          title="Create New Examination Draft"
+        >
+          <form onSubmit={handleCreateExam} className="flex flex-col gap-4">
+            <Input
+              label="Exam Title *"
+              placeholder="e.g. CS 401 — Distributed Systems Midterm"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              required
+            />
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Description (Optional)
+              </label>
+              <textarea
+                rows={2}
+                placeholder="Comprehensive examination covering consensus, transactions, and Raft..."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="w-full text-xs p-2.5 border border-slate-300 rounded-md focus:ring-1 focus:ring-[#4C70A6] outline-none"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Access Policy
+                </label>
+                <select
+                  value={accessPolicy}
+                  onChange={(e) => setAccessPolicy(e.target.value as any)}
+                  className="w-full text-xs p-2.5 bg-white border border-slate-300 rounded-md outline-none focus:ring-1 focus:ring-[#4C70A6]"
+                >
+                  <option value="INVITATION_ONLY">Invitation Only</option>
+                  <option value="APPROVAL_REQUIRED">Teacher Approval Required</option>
+                  <option value="PUBLIC">Public</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Timing Mode
+                </label>
+                <select
+                  value={timingMode}
+                  onChange={(e) => setTimingMode(e.target.value as any)}
+                  className="w-full text-xs p-2.5 bg-white border border-slate-300 rounded-md outline-none focus:ring-1 focus:ring-[#4C70A6]"
+                >
+                  <option value="WHOLE_PAPER">Whole Paper Timed</option>
+                  <option value="SECTION_TIMED">Per-Section Timed</option>
+                  <option value="QUESTION_TIMED">Per-Question Timed</option>
+                  <option value="MIXED">Mixed Timing</option>
+                </select>
+              </div>
+            </div>
+
+            <Input
+              label="Total Paper Duration (Minutes)"
+              type="number"
+              min={15}
+              max={600}
+              value={durationMinutes}
+              onChange={(e) => setDurationMinutes(Number(e.target.value))}
+            />
+
+            <div className="flex justify-end gap-2 mt-3 border-t border-slate-100 pt-3">
+              <Button type="button" variant="ghost" onClick={() => setIsModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" isLoading={isCreating}>
+                Create Draft & Open Builder
+              </Button>
+            </div>
+          </form>
+        </Modal>
 
         {/* Toolbar */}
         <div className="bg-white border border-slate-200 rounded-md p-4 shadow-2xs flex flex-col sm:flex-row gap-3 items-center justify-between">
@@ -133,7 +230,7 @@ export const ExamListScreen: React.FC = () => {
           <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
             <Filter className="w-4 h-4 text-slate-400 shrink-0" />
             <span className="text-xs font-semibold text-slate-600 shrink-0">Status:</span>
-            {["ALL", "DRAFT", "PUBLISHED", "UNPUBLISHED"].map((st) => (
+            {["ALL", "DRAFT", "PUBLISHED", "CLOSED"].map((st) => (
               <button
                 key={st}
                 onClick={() => setStatusFilter(st)}
@@ -158,7 +255,7 @@ export const ExamListScreen: React.FC = () => {
                 <TableHead>Revision</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Timing Mode</TableHead>
-                <TableHead>Policy</TableHead>
+                <TableHead>Access Policy</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -166,7 +263,7 @@ export const ExamListScreen: React.FC = () => {
               {filteredExams.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center py-8 text-slate-500 text-xs">
-                    No examinations found matching your filter.
+                    No examinations found in database. Click 'Create New Exam' to start.
                   </TableCell>
                 </TableRow>
               ) : (
@@ -176,7 +273,7 @@ export const ExamListScreen: React.FC = () => {
                       <div>
                         <div className="font-semibold text-slate-900 text-xs">{exam.title}</div>
                         <div className="text-[11px] text-slate-400 font-mono">
-                          ID: {exam.id} • {exam.sectionsCount} Sections • {exam.totalQuestions} Questions
+                          ID: {exam.id} • {exam.totalQuestions} Questions
                         </div>
                       </div>
                     </TableCell>

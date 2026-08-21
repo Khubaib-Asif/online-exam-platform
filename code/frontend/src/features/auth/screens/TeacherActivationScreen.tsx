@@ -1,20 +1,19 @@
 import React, { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import { CredentialPanel } from "@components/credential-panel/CredentialPanel";
 import { Input } from "@components/ui/Input";
 import { Button } from "@components/ui/Button";
 import { User, Lock, CheckCircle2 } from "lucide-react";
-import { setAuth } from "@/redux/slices/authSlice";
-import { useRegisterMutation } from "@/redux/services/authApi";
+import { useRedeemTeacherInvitationMutation } from "@/redux/services/bootstrapApi";
 
 export const TeacherActivationScreen: React.FC = () => {
     const navigate = useNavigate();
-    const [isLoading, setIsLoading] = useState(false);
+    const [searchParams] = useSearchParams();
+    const token = searchParams.get("token") || "";
+    const [redeemInvitation, { isLoading }] = useRedeemTeacherInvitationMutation();
     const [error, setError] = useState<string | null>(null);
-    const [registerMutation] = useRegisterMutation();
 
     const [formData, setFormData] = useState({
-        email: "teacher@institution.edu", // Read-only from invitation token
         firstName: "",
         lastName: "",
         password: "",
@@ -26,8 +25,12 @@ export const TeacherActivationScreen: React.FC = () => {
         if (error) setError(null);
     };
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!token) {
+            setError("Missing invitation token in URL.");
+            return;
+        }
         if (!formData.firstName || !formData.lastName || !formData.password) {
             setError("Please fill in all required fields.");
             return;
@@ -37,28 +40,19 @@ export const TeacherActivationScreen: React.FC = () => {
             return;
         }
 
-        setIsLoading(true);
-        registerMutation({
-            email: formData.email,
-            firstName: formData.firstName,
-            lastName: formData.lastName,
-            password: formData.password,
-        })
-            .unwrap()
-            .then((response) => {
-                // Assuming the response contains user data and access token
-                setAuth({
-                    user: response.user,
-                    accessToken: response.accessToken,
-                });
-                navigate("/dashboard");
-            })
-            .catch((err) => {
-                setError(err.data?.message || "Activation failed. Please try again.");
-            })
-            .finally(() => {
-                setIsLoading(false);
-            });
+        setError(null);
+        try {
+            await redeemInvitation({
+                token,
+                firstName: formData.firstName,
+                lastName: formData.lastName,
+                password: formData.password,
+            }).unwrap();
+
+            navigate("/login");
+        } catch (err: any) {
+            setError(err.data?.message || err.message || "Activation failed. Please check your token and try again.");
+        }
     };
 
     return (

@@ -14,9 +14,9 @@ export interface Device {
 }
 
 export interface RegisterDeviceRequest {
-    label: string;
-    os: string;
-    deviceType: 'DESKTOP' | 'LAPTOP' | 'MOBILE' | 'TABLET';
+    label?: string;
+    platform?: string;
+    appVersion?: string;
 }
 
 export interface RegisterDeviceResponse {
@@ -51,7 +51,7 @@ const getBaseQuery = async () => {
         // Dynamic import to avoid circular dependency
         const { axiosBaseQuery } = await import('@/lib/axiosBaseQuery');
         console.log('axiosBaseQuery loaded successfully');
-        baseQueryInstance = axiosBaseQuery({ baseUrl: '/v1/auth' });
+        baseQueryInstance = axiosBaseQuery({ baseUrl: '/v1/devices' });
         console.log('Base query initialized');
     }
     return baseQueryInstance;

@@ -13,23 +13,40 @@ import {
   CheckCircle,
   Copy,
 } from "lucide-react";
+import { useGetExamDistributionStatusQuery } from "@/redux/services/registrationApi";
 
 export const ExamDistributionStatusScreen: React.FC = () => {
   const { examId } = useParams<{ examId: string }>();
   const navigate = useNavigate();
+  const targetId = examId || "ex-401";
 
-  const distribution = {
-    examId: examId || "ex-401",
-    examTitle: "CS 401 — Distributed Systems & Architecture",
-    policy: "APPROVAL_REQUIRED" as const,
-    totalRegistered: 28,
-    pendingRequests: 2,
-    rejectedRequests: 1,
-    invitationsIssued: 15,
-    invitationsRedeemed: 12,
-    registrationWindowOpen: true,
-    registrationWindowEnd: "Aug 09, 2026 • 11:59 PM",
-  };
+  const { data: apiDistribution, isLoading } = useGetExamDistributionStatusQuery(targetId, { skip: !examId });
+
+  const distribution = apiDistribution
+    ? {
+        examId: apiDistribution.examId,
+        examTitle: apiDistribution.title,
+        policy: apiDistribution.accessPolicy as any,
+        totalRegistered: apiDistribution.approvedCount,
+        pendingRequests: apiDistribution.pendingCount,
+        rejectedRequests: apiDistribution.rejectedCount,
+        invitationsIssued: apiDistribution.invitationsCount,
+        invitationsRedeemed: apiDistribution.invitations?.reduce((sum: number, i: any) => sum + i.usedCount, 0) || 0,
+        registrationWindowOpen: apiDistribution.isRegistrationOpen,
+        registrationWindowEnd: new Date(apiDistribution.registrationClosesAt).toLocaleString(),
+      }
+    : {
+        examId: targetId,
+        examTitle: "CS 401 — Distributed Systems & Architecture",
+        policy: "APPROVAL_REQUIRED" as const,
+        totalRegistered: 28,
+        pendingRequests: 2,
+        rejectedRequests: 1,
+        invitationsIssued: 15,
+        invitationsRedeemed: 12,
+        registrationWindowOpen: true,
+        registrationWindowEnd: "Aug 09, 2026 • 11:59 PM",
+      };
 
   return (
     <AppLayout pageTitle={`Distribution Status — ${distribution.examId}`}>

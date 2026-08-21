@@ -1,16 +1,21 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { useAppDispatch } from "@redux/hooks";
+import { setAuth } from "@redux/slices/authSlice";
 import { CredentialPanel } from "@components/credential-panel/CredentialPanel";
 import { Input } from "@components/ui/Input";
 import { Button } from "@components/ui/Button";
 import { User, Mail, Lock, Camera, UserPlus, AlertCircle } from "lucide-react";
-import { useRegisterMutation } from "@redux/services/authApi";
+import { useRegisterMutation, useUploadProfilePhotoMutation } from "@redux/services/authApi";
 
 export const StudentSignupScreen: React.FC = () => {
     const navigate = useNavigate();
+    const dispatch = useAppDispatch();
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [register] = useRegisterMutation();
+    const [uploadProfilePhoto] = useUploadProfilePhotoMutation();
+
     const [formData, setFormData] = useState({
         ProfilePic: null as File | null,
         firstName: "",
@@ -31,6 +36,7 @@ export const StudentSignupScreen: React.FC = () => {
     const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
+            setFormData((prev) => ({ ...prev, ProfilePic: file }));
             const reader = new FileReader();
             reader.onloadend = () => {
                 setPhotoPreview(reader.result as string);
@@ -39,7 +45,7 @@ export const StudentSignupScreen: React.FC = () => {
         }
     };
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!formData.firstName || !formData.lastName || !formData.email || !formData.password) {
             setError("Please fill in all required profile fields.");
@@ -51,20 +57,34 @@ export const StudentSignupScreen: React.FC = () => {
         }
 
         setIsLoading(true);
-        register({
-            ...formData,
-            ProfilePic: formData.ProfilePic,
-        })
-            .unwrap()
-            .then(() => {
-                setIsLoading(false);
-                navigate("/verify-email-nag");
-            })
-            .catch((err) => {
-                setIsLoading(false);
-                setError("Failed to create account. Please try again.");
-                console.log("Registration error:", err);
-            });
+        try {
+            const regResponse = await register({
+                email: formData.email,
+                password: formData.password,
+                firstName: formData.firstName,
+                lastName: formData.lastName,
+            }).unwrap();
+
+            // Do not auto-authenticate here — require explicit login/verification flow
+
+            if (photoPreview) {
+                try {
+                    await uploadProfilePhoto({
+                        photoBase64: photoPreview,
+                        mimeType: formData.ProfilePic?.type || "image/jpeg",
+                    }).unwrap();
+                } catch (photoErr) {
+                    console.warn("Profile photo enrollment notice:", photoErr);
+                }
+            }
+
+            setIsLoading(false);
+            navigate("/login");
+        } catch (err: any) {
+            setIsLoading(false);
+            setError(err.data?.message || err.message || "Failed to create account. Please try again.");
+            console.error("Registration error:", err);
+        }
     };
 
     return (

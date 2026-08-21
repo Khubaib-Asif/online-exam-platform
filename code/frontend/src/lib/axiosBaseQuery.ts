@@ -156,7 +156,8 @@ export const axiosBaseQuery =
                     headers,
                 });
 
-                return { data: result.data };
+                const responseData = result.data?.data !== undefined ? result.data.data : result.data;
+                return { data: responseData };
             } catch (axiosError: any) {
                 return {
                     error: {

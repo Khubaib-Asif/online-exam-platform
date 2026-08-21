@@ -5,7 +5,8 @@ export * from "./screens/TeacherActivationScreen";    // M1-S03: Teacher Invitat
 export * from "./screens/LandingScreen";              // M1-S04: Landing Page
 export * from "./screens/LoginScreen";                // M1-S05: Login
 export * from "./screens/StudentSignupScreen";        // M1-S06: Student Signup
-export * from "./screens/VerifyEmailNagScreen";       // M1-S07: Verify Email
+export * from "./screens/VerifyEmailNagScreen";       // M1-S07: Verify Email Nag
+export * from "./screens/VerifyEmailScreen";          // M1-S07 Variant: Verify Email Handler
 export * from "./screens/ForgotPasswordScreen";       // M1-S08: Forgot Password
 export * from "./screens/ForgotPasswordSentScreen";   // M1-S09: Check Your Email
 export * from "./screens/ResetPasswordScreen";        // M1-S10: Reset Password

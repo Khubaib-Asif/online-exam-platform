@@ -137,4 +137,49 @@ export class AuthController {
         }
     }
 
+    static async uploadProfilePhoto(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const { photoBase64, mimeType } = req.body;
+            const updatedUser = await AuthService.updateProfilePhoto(req.user!.id, photoBase64, mimeType);
+            res.json({ data: updatedUser, message: 'Profile photo uploaded successfully' });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    static async requestEmailVerification(req: Request, res: Response, next: NextFunction) {
+        try {
+            const email = req.body.email || (req as any).user?.email;
+            if (!email) {
+                return res.status(400).json({ error: { message: 'Email address is required' } });
+            }
+            const result = await AuthService.requestEmailVerification(email);
+            res.json({ data: result, message: result.message });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    static async verifyEmail(req: Request, res: Response, next: NextFunction) {
+        try {
+            const { token } = req.body;
+            if (!token) {
+                return res.status(400).json({ error: { message: 'Verification token is required' } });
+            }
+            const result = await AuthService.verifyEmail(token);
+            res.json({ data: result, message: result.message });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    static async verifyEmailDirect(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const userId = req.user!.id;
+            const result = await AuthService.verifyEmailDirect(userId);
+            res.json({ data: result, message: result.message });
+        } catch (error) {
+            next(error);
+        }
+    }
 }

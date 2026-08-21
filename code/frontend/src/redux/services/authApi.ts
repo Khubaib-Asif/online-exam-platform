@@ -55,12 +55,10 @@ export interface LoginRequest {
 }
 
 export interface RegisterRequest {
-    ProfilePic?: File | null;
     email: string;
     password: string;
     firstName: string;
     lastName: string;
-    termsAccepted?: boolean;
 }
 
 export interface ForgotPasswordRequest {
@@ -69,7 +67,7 @@ export interface ForgotPasswordRequest {
 
 export interface ResetPasswordRequest {
     token: string;
-    newPassword: string;
+    password: string;
 }
 
 export interface VerifyEmailRequest {
@@ -155,14 +153,32 @@ export const authApi = createApi({
             invalidatesTags: ['Auth'],
         }),
 
-        // Verify Email
-        verifyEmail: builder.mutation<VerifyEmailResponse, VerifyEmailRequest>({
+        // Verify Email with Token
+        verifyEmail: builder.mutation<any, { token: string }>({
             query: (data) => ({
                 url: '/verify-email',
                 method: 'POST',
                 data,
             }),
-            invalidatesTags: ['User'],
+            invalidatesTags: ['User', 'Auth'],
+        }),
+
+        // Request / Resend Email Verification
+        requestEmailVerification: builder.mutation<any, { email?: string }>({
+            query: (data) => ({
+                url: '/request-verification',
+                method: 'POST',
+                data,
+            }),
+        }),
+
+        // Direct Email Verify
+        verifyEmailDirect: builder.mutation<any, void>({
+            query: () => ({
+                url: '/verify-email-direct',
+                method: 'POST',
+            }),
+            invalidatesTags: ['User', 'Auth'],
         }),
 
         // Refresh Token
@@ -181,6 +197,16 @@ export const authApi = createApi({
                 method: 'POST',
             }),
             invalidatesTags: ['Auth'],
+        }),
+
+        // Upload Profile Photo
+        uploadProfilePhoto: builder.mutation<{ message: string; user: UserProfile }, { photoBase64: string; mimeType?: string }>({
+            query: (data) => ({
+                url: '/profile-photo',
+                method: 'POST',
+                data,
+            }),
+            invalidatesTags: ['User'],
         }),
 
         // ------------------------------
@@ -226,8 +252,11 @@ export const {
     useForgotPasswordMutation,
     useResetPasswordMutation,
     useVerifyEmailMutation,
+    useRequestEmailVerificationMutation,
+    useVerifyEmailDirectMutation,
     useRefreshTokenMutation,
     useLogoutMutation,
+    useUploadProfilePhotoMutation,
 
     // Token validation queries
     useValidateResetTokenQuery,

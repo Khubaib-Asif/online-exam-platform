@@ -22,7 +22,7 @@ export const errorHandler = (
             error: {
                 code: 'VALIDATION_ERROR',
                 message: 'Invalid request data',
-                details: err.errors.map((e) => ({ path: e.path.join('.'), message: e.message })),
+                details: err.issues.map((e: any) => ({ path: e.path.join('.'), message: e.message })),
             },
         });
     }

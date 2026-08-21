@@ -89,4 +89,64 @@ export class EmailService {
       console.error('❌ Failed to send password reset email:', error);
     }
   }
+
+  // 3. Send Exam Invitation Email
+  static async sendExamInvitation(toEmail: string, invitationToken: string) {
+    const inviteUrl = `${env.FRONTEND_URL}/redeem-invitation?code=${invitationToken}`;
+
+    try {
+      const transporter = await this.getTransporter();
+      const info = await transporter.sendMail({
+        from: env.EMAIL_FROM,
+        to: toEmail,
+        subject: 'Exam Invitation Code - Online Exam Platform',
+        html: `
+          <h2>Exam Access Invitation</h2>
+          <p>You have received a direct invitation code for an examination session.</p>
+          <p>Your Invitation Code: <strong>${invitationToken}</strong></p>
+          <p><a href="${inviteUrl}" style="padding: 10px 20px; background-color: #3b82f6; color: white; text-decoration: none; border-radius: 4px;">Redeem Invitation</a></p>
+          <p>Or copy this link: ${inviteUrl}</p>
+        `,
+      });
+
+      const previewUrl = nodemailer.getTestMessageUrl(info);
+      if (previewUrl) {
+        console.log(`✉️ [EMAIL SENT] Exam Invitation Preview URL: ${previewUrl}`);
+      }
+    } catch (error) {
+      console.error('❌ Failed to send exam invitation email:', error);
+    }
+  }
+
+  // 4. Send Email Verification Link
+  static async sendEmailVerification(toEmail: string, verificationToken: string) {
+    const verifyUrl = `${env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
+
+    console.log(`\n======================================================`);
+    console.log(`✉️ [EMAIL VERIFICATION LINK] For: ${toEmail}`);
+    console.log(`🔗 Link: ${verifyUrl}`);
+    console.log(`======================================================\n`);
+
+    try {
+      const transporter = await this.getTransporter();
+      const info = await transporter.sendMail({
+        from: env.EMAIL_FROM,
+        to: toEmail,
+        subject: 'Verify Your Email Address - Online Exam Platform',
+        html: `
+          <h2>Welcome to Online Exam Platform</h2>
+          <p>Please verify your email address to complete your registration and activate your examination account.</p>
+          <p><a href="${verifyUrl}" style="padding: 10px 20px; background-color: #4C70A6; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">Verify Email Address</a></p>
+          <p>Or copy this link to your browser: ${verifyUrl}</p>
+        `,
+      });
+
+      const previewUrl = nodemailer.getTestMessageUrl(info);
+      if (previewUrl) {
+        console.log(`✉️ [EMAIL SENT] Email Verification Preview URL: ${previewUrl}`);
+      }
+    } catch (error) {
+      console.error('❌ Failed to send email verification email:', error);
+    }
+  }
 }

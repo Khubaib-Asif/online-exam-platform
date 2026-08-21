@@ -1,17 +1,27 @@
-import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useState, useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { AppLayout } from "@components/layout/AppLayout";
 import { Button } from "@components/ui/Button";
 import { Input } from "@components/ui/Input";
 import { KeyRound, ShieldCheck, CheckCircle2, AlertCircle, ArrowLeft } from "lucide-react";
+import { useRedeemExamInvitationMutation } from "@/redux/services/registrationApi";
 
 export const InvitationRedemptionScreen: React.FC = () => {
   const navigate = useNavigate();
-  const [code, setCode] = useState("");
+  const [searchParams] = useSearchParams();
+  const initialCode = searchParams.get("code") || "";
+  const [redeemInvitation, { isLoading }] = useRedeemExamInvitationMutation();
+  const [code, setCode] = useState(initialCode);
   const [status, setStatus] = useState<"IDLE" | "LOADING" | "SUCCESS" | "ERROR">("IDLE");
   const [errorMessage, setErrorMessage] = useState("");
 
-  const handleRedeem = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (initialCode) {
+      setCode(initialCode);
+    }
+  }, [initialCode]);
+
+  const handleRedeem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!code.trim()) {
       setErrorMessage("Please enter a valid invitation code.");
@@ -20,14 +30,13 @@ export const InvitationRedemptionScreen: React.FC = () => {
     }
 
     setStatus("LOADING");
-    setTimeout(() => {
-      if (code.trim().toUpperCase() === "INVALID") {
-        setStatus("ERROR");
-        setErrorMessage("Invitation code is invalid, expired, or already redeemed.");
-      } else {
-        setStatus("SUCCESS");
-      }
-    }, 800);
+    try {
+      await redeemInvitation({ token: code.trim() }).unwrap();
+      setStatus("SUCCESS");
+    } catch (err: any) {
+      setStatus("ERROR");
+      setErrorMessage(err.data?.message || err.message || "Invitation code is invalid, expired, or already redeemed.");
+    }
   };
 
   return (

@@ -3,43 +3,32 @@ import { AppLayout } from "@components/layout/AppLayout";
 import { Badge } from "@components/ui/Badge";
 import { Button } from "@components/ui/Button";
 import { Modal } from "@components/ui/Modal";
-import { Smartphone, Monitor, Trash2, AlertCircle, ShieldCheck, Plus, ExternalLink } from "lucide-react";
+import { Smartphone, Monitor, Trash2, AlertCircle, ShieldCheck, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-
-interface DeviceItem {
-  id: string;
-  name: string;
-  os: string;
-  lastSeen: string;
-  isCurrent: boolean;
-  status: "active" | "offline";
-}
+import { useGetDevicesQuery, useRevokeDeviceMutation } from "@/redux/services/deviceApi";
 
 export const MyDevicesScreen: React.FC = () => {
   const navigate = useNavigate();
-  const [devices, setDevices] = useState<DeviceItem[]>([
-    {
-      id: "dev-01",
-      name: "Primary Desktop Workstation",
-      os: "Windows 11 Enterprise (Electron Signed App)",
-      lastSeen: "Current Session",
-      isCurrent: true,
-      status: "active",
-    },
-  ]);
+  const { data: deviceResponse, isLoading, refetch } = useGetDevicesQuery();
+  const [revokeDevice, { isLoading: isRevoking }] = useRevokeDeviceMutation();
 
-  const [selectedDeviceToRevoke, setSelectedDeviceToRevoke] = useState<DeviceItem | null>(null);
+  const devices = deviceResponse?.devices || [];
+  const activeCount = deviceResponse?.activeCount ?? devices.length;
 
-  const activeCount = devices.length;
+  const [selectedDeviceToRevoke, setSelectedDeviceToRevoke] = useState<any | null>(null);
 
-  const handleRevokeConfirm = () => {
+  const handleRevokeConfirm = async () => {
     if (!selectedDeviceToRevoke) return;
-    setDevices((prev) => prev.filter((d) => d.id !== selectedDeviceToRevoke.id));
-    setSelectedDeviceToRevoke(null);
+    try {
+      await revokeDevice(selectedDeviceToRevoke.id).unwrap();
+      setSelectedDeviceToRevoke(null);
+      refetch();
+    } catch (err: any) {
+      console.error("Revoke error:", err);
+    }
   };
 
   const handleRegisterNewDevice = () => {
-    // Navigates to desktop app registration launcher
     navigate("/devices/register-action");
   };
 
@@ -96,7 +85,7 @@ export const MyDevicesScreen: React.FC = () => {
                     <div className="flex flex-col">
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-sm text-slate-900">
-                          {device.name}
+                          {device.label || device.name || "Registered Device"}
                         </span>
                         {device.isCurrent && (
                           <Badge variant="success" className="text-[10px]">
@@ -105,7 +94,7 @@ export const MyDevicesScreen: React.FC = () => {
                         )}
                       </div>
                       <span className="text-xs text-slate-500 font-mono mt-0.5">
-                        {device.os} • Last seen: {device.lastSeen}
+                        {device.platform || device.os || "Desktop"} {device.lastSeenAt ? `• Last seen: ${new Date(device.lastSeenAt).toLocaleDateString()}` : device.lastSeen ? `• Last seen: ${device.lastSeen}` : ''}
                       </span>
                     </div>
                   </div>

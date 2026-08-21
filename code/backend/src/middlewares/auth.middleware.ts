@@ -10,6 +10,7 @@ export interface AuthRequest extends Request {
         id: string;
         email: string;
         role: UserRole;
+        isEmailVerified?: boolean;
     };
 }
 
@@ -24,14 +25,14 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
         const payload = verifyToken(token);
         const user = await prisma.user.findUnique({
             where: { id: payload.sub },
-            select: { id: true, email: true, role: true, status: true },
+            select: { id: true, email: true, role: true, status: true, emailVerifiedAt: true },
         });
 
         if (!user || user.status !== 'ACTIVE') {
             return next(new AppError(401, 'Invalid or disabled account', 'AUTH_INVALID'));
         }
 
-        req.user = { id: user.id, email: user.email, role: user.role as UserRole };
+        req.user = { id: user.id, email: user.email, role: user.role as UserRole, isEmailVerified: !!user.emailVerifiedAt };
         next();
     } catch (error) {
         return next(new AppError(401, 'Invalid or expired token', 'AUTH_INVALID'));

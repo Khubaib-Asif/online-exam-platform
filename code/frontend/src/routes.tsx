@@ -23,6 +23,7 @@ import {
     ForgotPasswordScreen,
     ResetPasswordScreen,
     VerifyEmailNagScreen,
+    VerifyEmailScreen,
     RegisterDeviceScreen,
     DeviceLimitReachedScreen,
     MyDevicesScreen,
@@ -125,48 +126,66 @@ const AuthGuard: React.FC<RouteGuardProps> = ({
     children,
     allowedRoles,
     requireVerifiedEmail = true,
-    requireDevice = true
+    requireDevice = false
 }) => {
+    const navigate = useNavigate();
     const { isAuthenticated, user, bootstrapStatus } = useAppSelector((state) => state.auth);
     const { data: deviceData, isLoading: devicesLoading } = useGetDevicesQuery(undefined, {
         skip: !isAuthenticated || !user || user.role !== "STUDENT",
     });
     const location = useLocation();
 
-    // 1. Check bootstrap status
-    if (bootstrapStatus === "UNINITIALISED") {
-        return <Navigate to="/bootstrap" replace />;
+    // Compute single redirect path (avoid setting state during render)
+    let redirectPath: string | null = null;
+    // Build a stable redirect state using useMemo to avoid effect re-running every render
+    // (creating object literals inline would create a new reference each render)
+    let redirectStateLocal: any = undefined;
+
+    // 1. Check bootstrap status (only for unauthenticated users)
+    if (!isAuthenticated && bootstrapStatus === "UNINITIALISED") {
+        if (location.pathname !== '/bootstrap') {
+            redirectPath = '/bootstrap';
+        }
     }
 
     // 2. Check authentication
-    if (!isAuthenticated || !user) {
-        return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+    if (!redirectPath && (!isAuthenticated || !user)) {
+        if (location.pathname !== '/login') {
+            redirectPath = '/login';
+            redirectStateLocal = { from: location.pathname };
+        }
     }
 
     // 3. Check role-based access
-    if (allowedRoles && !allowedRoles.includes(user.role)) {
+    if (!redirectPath && allowedRoles && user && !allowedRoles.includes(user.role)) {
         switch (user.role) {
             case "OWNER":
-                return <Navigate to="/owner-console" replace />;
+                redirectPath = '/owner-console';
+                break;
             case "TEACHER":
-                return <Navigate to="/teacher-dashboard" replace />;
+                redirectPath = '/teacher-dashboard';
+                break;
             case "PROCTOR":
-                return <Navigate to="/proctor-dashboard" replace />;
+                redirectPath = '/proctor-dashboard';
+                break;
             case "STUDENT":
             default:
-                return <Navigate to="/student-dashboard" replace />;
+                redirectPath = '/student-dashboard';
+                break;
         }
     }
 
     // 4. Check email verification (skip for OWNER role)
-    if (requireVerifiedEmail && user.role !== "OWNER" && !user.isEmailVerified) {
+    if (!redirectPath && requireVerifiedEmail && user && user.role !== "OWNER" && !user.isEmailVerified) {
         if (location.pathname !== '/verify-email-nag') {
-            return <Navigate to="/verify-email-nag" replace />;
+            redirectPath = '/verify-email-nag';
         }
     }
 
     // 5. Check device registration (only for STUDENTS)
-    if (requireDevice && user.role === "STUDENT") {
+    const skipDeviceCheck = (location.state as any)?.skipDeviceCheck;
+
+    if (!redirectPath && requireDevice && user && user.role === "STUDENT" && !skipDeviceCheck) {
         const deviceRoutes = [
             '/devices',
             '/devices/register-action',
@@ -177,10 +196,21 @@ const AuthGuard: React.FC<RouteGuardProps> = ({
 
         if (!devicesLoading && deviceData && deviceData.activeCount === 0) {
             if (!deviceRoutes.some(route => location.pathname.startsWith(route))) {
-                return <Navigate to="/devices/register-action" replace />;
+                redirectPath = '/devices/register-action';
             }
         }
     }
+
+    // Perform navigation in effect to avoid render-time redirects
+    const memoRedirectState = React.useMemo(() => redirectStateLocal, [redirectStateLocal?.from]);
+
+    React.useEffect(() => {
+        if (redirectPath) {
+            navigate(redirectPath, { replace: true, state: memoRedirectState });
+        }
+    }, [redirectPath, memoRedirectState, navigate]);
+
+    if (redirectPath) return null;
 
     return <>{children}</>;
 };
@@ -190,7 +220,13 @@ const AuthGuard: React.FC<RouteGuardProps> = ({
  * Used for public routes that shouldn't be accessible when logged in
  */
 const PublicGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const { isAuthenticated, user } = useAppSelector((state) => state.auth);
+    const { isAuthenticated, user, bootstrapStatus } = useAppSelector((state) => state.auth);
+    const location = useLocation();
+
+    // Allow accessing /bootstrap if uninitialised
+    if (location.pathname === "/bootstrap" && bootstrapStatus === "UNINITIALISED") {
+        return <>{children}</>;
+    }
 
     if (isAuthenticated && user) {
         switch (user.role) {
@@ -347,6 +383,9 @@ const router = createBrowserRouter([
     { path: "/signup", element: <PublicGuard><StudentSignupScreen /></PublicGuard> },
     { path: "/activate-teacher", element: <PublicGuard><TeacherActivationScreen /></PublicGuard> },
 
+    // Email Verification Flow
+    { path: "/verify-email", element: <VerifyEmailScreen /> },
+
     // Password Reset Flow - Public but with guards
     { path: "/forgot-password", element: <PublicGuard><ForgotPasswordScreen /></PublicGuard> },
     { path: "/reset-password", element: (<PublicGuard><ResetPasswordGuard><ResetPasswordScreen /></ResetPasswordGuard></PublicGuard>) },
@@ -356,7 +395,7 @@ const router = createBrowserRouter([
     // ============================================
 
     // M1 - Auth & Identity
-    { path: "/verify-email-nag", element: (<AuthGuard requireVerifiedEmail={false}><VerifyEmailNagScreen /></AuthGuard>) },
+    { path: "/verify-email-nag", element: (<AuthGuard requireVerifiedEmail={false} requireDevice={false}><VerifyEmailNagScreen /></AuthGuard>) },
     { path: "/dashboard", element: <AuthGuard><DashboardDispatcher /></AuthGuard> },
     { path: "/student-dashboard", element: (<AuthGuard allowedRoles={["STUDENT"]}><DeviceRegistrationWrapper><StudentDashboardScreen /></DeviceRegistrationWrapper></AuthGuard>) },
     { path: "/teacher-dashboard", element: <AuthGuard allowedRoles={["TEACHER"]}><TeacherDashboardScreen /></AuthGuard> },

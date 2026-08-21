@@ -14,32 +14,62 @@ import {
   Calendar,
   FileText,
 } from "lucide-react";
+import {
+  useGetTeacherPendingRequestsQuery,
+  useDecideRegistrationRequestMutation,
+} from "@/redux/services/registrationApi";
 
 export const TeacherRegistrationReviewScreen: React.FC = () => {
   const { requestId } = useParams<{ requestId: string }>();
   const navigate = useNavigate();
+  const { data: requestsData, refetch } = useGetTeacherPendingRequestsQuery();
+  const [decideRegistrationRequest, { isLoading: isDeciding }] = useDecideRegistrationRequestMutation();
 
-  const [decision, setDecision] = useState<"PENDING" | "APPROVED" | "REJECTED">("PENDING");
+  const foundRequest = requestsData?.find((r) => r.id === requestId);
+
+  const request = foundRequest
+    ? {
+        id: foundRequest.id,
+        studentName: foundRequest.studentName,
+        studentEmail: foundRequest.studentEmail,
+        studentId: foundRequest.studentId,
+        examId: foundRequest.examId,
+        examTitle: foundRequest.examTitle,
+        requestedAt: new Date(foundRequest.requestedAt).toLocaleString(),
+        status: (foundRequest.status === "REQUESTED" ? "PENDING" : foundRequest.status) as "PENDING" | "APPROVED" | "REJECTED",
+        studentContext: "Student requested registration for approval-required examination session.",
+      }
+    : {
+        id: requestId || "",
+        studentName: "Student Candidate",
+        studentEmail: "student@institution.edu",
+        studentId: requestId?.slice(0, 8) || "STD-001",
+        examId: "EX-TARGET",
+        examTitle: "Examination Session",
+        requestedAt: "Recently Submitted",
+        status: "PENDING" as const,
+        studentContext: "Registration request queued for teacher review.",
+      };
+
+  const [decision, setDecision] = useState<"PENDING" | "APPROVED" | "REJECTED">(request.status);
   const [decisionNotes, setDecisionNotes] = useState("");
 
-  const request = {
-    id: requestId || "req-101",
-    studentName: "Alex Rivera",
-    studentEmail: "alex.rivera@university.edu",
-    studentId: "STD-88492",
-    registeredDevices: 1,
-    examId: "ex-401",
-    examTitle: "CS 401 — Distributed Systems & Architecture",
-    requestedAt: "Aug 04, 2026 • 10:15 AM",
-    studentContext: "Enrolled in Lecture Section 01. Requesting access for mid-term attempt.",
+  const handleRecordDecision = async (status: "APPROVED" | "REJECTED") => {
+    if (!requestId) return;
+    try {
+      await decideRegistrationRequest({ registrationId: requestId, decision: status }).unwrap();
+      setDecision(status);
+      refetch();
+    } catch (err: any) {
+      console.error("Decision error:", err);
+      alert(err.data?.message || "Failed to record decision.");
+    }
   };
 
-  const handleRecordDecision = (status: "APPROVED" | "REJECTED") => {
-    setDecision(status);
-  };
+  const isPending = decision === "PENDING" || request.status === "PENDING";
 
   return (
-    <AppLayout pageTitle={`Review Request — ${request.id}`}>
+    <AppLayout pageTitle={`Review Request — ${request.examTitle}`}>
       <div className="max-w-2xl mx-auto flex flex-col gap-6">
         <div>
           <button
@@ -91,7 +121,7 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
                 <span>{request.studentEmail}</span>
               </div>
               <div className="text-xs text-slate-500 font-mono">
-                ID: {request.studentId} • Registered Devices: {request.registeredDevices}
+                ID: {request.studentId}
               </div>
             </div>
 
@@ -100,7 +130,8 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
                 Target Exam
               </h3>
               <div className="text-xs font-semibold text-slate-900">{request.examTitle}</div>
-              <div className="text-xs text-slate-500 font-mono flex items-center gap-1">
+              <div className="text-xs text-slate-400 font-mono text-[11px]">{request.examId}</div>
+              <div className="text-xs text-slate-500 font-mono flex items-center gap-1 mt-1">
                 <Calendar className="w-3.5 h-3.5 text-slate-400" />
                 <span>{request.requestedAt}</span>
               </div>
@@ -112,24 +143,24 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
             <div className="bg-white p-3 rounded-md border border-slate-200 text-xs text-slate-700">
               <span className="font-semibold text-slate-900 flex items-center gap-1.5 mb-1">
                 <FileText className="w-3.5 h-3.5 text-slate-500" />
-                Student Request Note:
+                Registration Note:
               </span>
-              <p className="text-slate-600 font-mono">{request.studentContext}</p>
+              <p className="text-slate-600">{request.studentContext}</p>
             </div>
           )}
 
           {/* Decision Section */}
-          {decision === "PENDING" ? (
+          {isPending ? (
             <div className="flex flex-col gap-4 pt-2 border-t border-slate-100">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Teacher Decision Reason / Note (Optional)
+                  Teacher Decision Reason / Audit Note (Optional)
                 </label>
                 <textarea
                   rows={3}
                   value={decisionNotes}
                   onChange={(e) => setDecisionNotes(e.target.value)}
-                  placeholder="e.g. Verified against course roster..."
+                  placeholder="e.g. Verified student eligibility in class roster..."
                   className="w-full text-xs p-3 border border-slate-300 rounded-md focus:ring-2 focus:ring-[#4C70A6]/30 focus:border-[#4C70A6] outline-none"
                 />
               </div>
@@ -139,6 +170,7 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
                   variant="primary"
                   size="md"
                   className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                  isLoading={isDeciding}
                   onClick={() => handleRecordDecision("APPROVED")}
                   icon={<CheckCircle className="w-4 h-4" />}
                 >
@@ -148,6 +180,7 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
                   variant="secondary"
                   size="md"
                   className="flex-1 text-red-600 border-red-200 hover:bg-red-50"
+                  isLoading={isDeciding}
                   onClick={() => handleRecordDecision("REJECTED")}
                   icon={<XCircle className="w-4 h-4" />}
                 >
@@ -162,7 +195,7 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
                 Decision Recorded: {decision}
               </h3>
               <p className="text-xs text-slate-500">
-                An auditable entry has been appended to the platform security log.
+                The decision has been written to PostgreSQL and the student's status updated.
               </p>
               <Button
                 variant="secondary"

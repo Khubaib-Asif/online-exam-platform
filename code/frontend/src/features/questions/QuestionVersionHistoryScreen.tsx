@@ -5,37 +5,23 @@ import { Badge } from "@components/ui/Badge";
 import { Button } from "@components/ui/Button";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@components/ui/Table";
 import { History, ArrowLeft, ShieldCheck, Lock, Eye } from "lucide-react";
+import { useGetQuestionDetailsQuery } from "@/redux/services/questionBankApi";
 
 export const QuestionVersionHistoryScreen: React.FC = () => {
   const { questionId } = useParams<{ questionId: string }>();
   const navigate = useNavigate();
+  const targetId = questionId || "q-101";
 
-  const versions = [
-    {
-      version: 3,
-      createdAt: "Aug 02, 2026 • 11:30 AM",
-      author: "Dr. Sarah Jenkins",
-      referencedExams: ["CS 401 — Midterm (Published)"],
-      isCurrent: true,
-      changes: "Updated prompt option B to use floor notation.",
-    },
-    {
-      version: 2,
-      createdAt: "Jul 15, 2026 • 02:10 PM",
-      author: "Dr. Sarah Jenkins",
-      referencedExams: ["CS 401 — Practice Quiz 1"],
-      isCurrent: false,
-      changes: "Increased awarded marks from 3 to 4 points.",
-    },
-    {
-      version: 1,
-      createdAt: "Jun 01, 2026 • 09:00 AM",
-      author: "Dr. Sarah Jenkins",
-      referencedExams: [],
-      isCurrent: false,
-      changes: "Initial question draft creation.",
-    },
-  ];
+  const { data: apiDetails, isLoading } = useGetQuestionDetailsQuery(targetId, { skip: !questionId });
+
+  const versions = (apiDetails?.versions || []).map((v, idx) => ({
+    version: v.versionNumber,
+    createdAt: new Date(v.createdAt).toLocaleString(),
+    author: "Instructor",
+    referencedExams: ["Exam Revision Baseline"],
+    isCurrent: idx === 0,
+    changes: `Content Hash: ${v.contentHash.substring(0, 16)}...`,
+  }));
 
   return (
     <AppLayout pageTitle={`Version History — ${questionId || "q-101"}`}>

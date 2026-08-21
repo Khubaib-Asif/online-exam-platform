@@ -11,9 +11,13 @@ router.post('/auth/login', AuthController.login);
 router.post('/teacher-invitations/redeem', AuthController.redeemTeacherInvitation);
 router.post('/auth/forgot-password', AuthController.forgotPassword);
 router.post('/auth/reset-password', AuthController.resetPassword);
+router.post('/auth/request-verification', AuthController.requestEmailVerification);
+router.post('/auth/verify-email', AuthController.verifyEmail);
 
 // Protected Routes
 router.get('/auth/me', authenticate, AuthController.getMe);
+router.post('/auth/profile-photo', authenticate, AuthController.uploadProfilePhoto);
+router.post('/auth/verify-email-direct', authenticate, AuthController.verifyEmailDirect);
 
 // Owner-Only Routes
 router.post(

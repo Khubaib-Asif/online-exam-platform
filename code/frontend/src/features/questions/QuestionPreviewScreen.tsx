@@ -4,24 +4,38 @@ import { AppLayout } from "@components/layout/AppLayout";
 import { Badge } from "@components/ui/Badge";
 import { Button } from "@components/ui/Button";
 import { Eye, ArrowLeft, ShieldCheck, Lock } from "lucide-react";
+import { useGetQuestionDetailsQuery } from "@/redux/services/questionBankApi";
 
 export const QuestionPreviewScreen: React.FC = () => {
   const { questionId } = useParams<{ questionId: string }>();
   const navigate = useNavigate();
+  const targetId = questionId || "q-101";
 
-  const question = {
-    id: questionId || "q-101",
-    version: 2,
-    type: "MCQ" as const,
-    prompt: "In Paxos consensus, what is the minimum quorum size required for a cluster of N nodes?",
-    marks: 4,
-    options: [
-      { id: "opt-1", text: "N / 2" },
-      { id: "opt-2", text: "floor(N / 2) + 1" },
-      { id: "opt-3", text: "N - 1" },
-      { id: "opt-4", text: "2 * N + 1" },
-    ],
-  };
+  const { data: apiDetails, isLoading } = useGetQuestionDetailsQuery(targetId, { skip: !questionId });
+  const activeVersion = apiDetails?.versions[0];
+
+  const question = activeVersion
+    ? {
+        id: apiDetails.id,
+        version: activeVersion.versionNumber,
+        type: activeVersion.type,
+        prompt: activeVersion.content,
+        marks: activeVersion.marks,
+        options: activeVersion.options.map((optText, idx) => ({ id: `opt-${idx}`, text: optText })),
+      }
+    : {
+        id: targetId,
+        version: 2,
+        type: "MCQ" as const,
+        prompt: "In Paxos consensus, what is the minimum quorum size required for a cluster of N nodes?",
+        marks: 4,
+        options: [
+          { id: "opt-1", text: "N / 2" },
+          { id: "opt-2", text: "floor(N / 2) + 1" },
+          { id: "opt-3", text: "N - 1" },
+          { id: "opt-4", text: "2 * N + 1" },
+        ],
+      };
 
   return (
     <AppLayout pageTitle={`Question Preview — ${question.id}`}>

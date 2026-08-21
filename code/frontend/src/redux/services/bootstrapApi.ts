@@ -2,10 +2,11 @@ import { createApi } from '@reduxjs/toolkit/query/react';
 import { type UserProfile } from '@redux/slices/authSlice';
 
 export interface CreateOwnerRequest {
+    bootstrapSecret: string;
     email: string;
+    firstName: string;
+    lastName: string;
     password: string;
-    fullName: string;
-    secret: string; // BOOTSTRAP_SECRET
 }
 
 export interface CreateOwnerResponse {
@@ -25,7 +26,8 @@ export interface CreateTeacherInvitationResponse {
 
 export interface RedeemTeacherInvitationRequest {
     token: string;
-    fullName: string;
+    firstName: string;
+    lastName: string;
     password: string;
 }
 
@@ -48,7 +50,7 @@ const getBaseQuery = async () => {
         // Dynamic import to avoid circular dependency
         const { axiosBaseQuery } = await import('@/lib/axiosBaseQuery');
         console.log('axiosBaseQuery loaded successfully');
-        baseQueryInstance = axiosBaseQuery({ baseUrl: '/v1/auth' });
+        baseQueryInstance = axiosBaseQuery({ baseUrl: '/v1' });
         console.log('Base query initialized');
     }
     return baseQueryInstance;

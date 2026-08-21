@@ -27,7 +27,7 @@ export const TeacherDashboardScreen: React.FC = () => {
     const quickActions = [
         {
             label: "Create Exam",
-            path: "/builder/new",
+            path: "/exams?create=true",
             icon: PlusCircle,
             variant: "primary" as const,
         },

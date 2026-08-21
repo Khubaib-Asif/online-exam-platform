@@ -16,6 +16,7 @@ import {
   ChevronRight,
   ShieldAlert,
 } from "lucide-react";
+import { useGetExamCatalogueQuery } from "@/redux/services/registrationApi";
 
 export interface CatalogueExamItem {
   id: string;
@@ -58,7 +59,7 @@ const mockExams: CatalogueExamItem[] = [
     teacherName: "Dr. Elena Rostova",
     policy: "INVITATION_ONLY",
     durationMinutes: 150,
-    totalQuestions: 50,
+    totalQuestions: 40,
     startDate: "Aug 15, 2026 10:00 AM",
     endDate: "Aug 15, 2026 12:30 PM",
     registrationState: "NOT_REGISTERED",
@@ -81,7 +82,26 @@ export const ExamCatalogueScreen: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [policyFilter, setPolicyFilter] = useState<string>("ALL");
 
-  const filteredExams = mockExams.filter((exam) => {
+  const { data: apiCatalogueData, isLoading } = useGetExamCatalogueQuery({
+    search: searchTerm || undefined,
+    policy: policyFilter !== "ALL" ? policyFilter : undefined,
+  });
+
+  const activeExamsList: CatalogueExamItem[] = (apiCatalogueData && apiCatalogueData.length > 0)
+    ? apiCatalogueData.map((e) => ({
+        id: e.id,
+        title: e.title,
+        teacherName: e.teacherName,
+        policy: e.accessPolicy as any,
+        durationMinutes: e.durationMinutes,
+        totalQuestions: e.totalQuestions,
+        startDate: new Date(e.startsAt).toLocaleDateString(),
+        endDate: new Date(e.closesAt).toLocaleDateString(),
+        registrationState: e.registrationState === "APPROVED" ? "REGISTERED" : e.registrationState === "REQUESTED" ? "REQUEST_PENDING" : (e.registrationState as any),
+      }))
+    : mockExams;
+
+  const filteredExams = activeExamsList.filter((exam) => {
     const matchesSearch =
       exam.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
       exam.teacherName.toLowerCase().includes(searchTerm.toLowerCase());

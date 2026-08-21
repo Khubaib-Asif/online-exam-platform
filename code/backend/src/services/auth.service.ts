@@ -175,10 +175,16 @@ export class AuthService {
                 role: 'STUDENT',
                 status: 'ACTIVE',
             },
-            select: { id: true, email: true, firstName: true, lastName: true, role: true, createdAt: true },
+            select: { id: true, email: true, firstName: true, lastName: true, role: true, createdAt: true, emailVerifiedAt: true },
         });
 
-        return student;
+        const isVerified = !!student.emailVerifiedAt;
+        const { token } = generateAccessToken(student.id, student.role, isVerified);
+
+        return {
+            user: student,
+            accessToken: token,
+        };
     }
 
     // 5. Login
@@ -202,7 +208,8 @@ export class AuthService {
             data: { lastLoginAt: new Date(), failedLoginCount: 0 },
         });
 
-        const { token, tokenId } = generateAccessToken(user.id, user.role);
+        const isVerified = !!user.emailVerifiedAt;
+        const { token, tokenId } = generateAccessToken(user.id, user.role, isVerified);
 
         // Save refresh token family in DB
         const refreshTokenRaw = crypto.randomBytes(32).toString('hex');
@@ -227,6 +234,7 @@ export class AuthService {
                 firstName: user.firstName,
                 lastName: user.lastName,
                 role: user.role,
+                isEmailVerified: isVerified,
             },
             accessToken: token,
             refreshToken: refreshTokenRaw,
@@ -246,11 +254,15 @@ export class AuthService {
                 status: true,
                 createdAt: true,
                 lastLoginAt: true,
+                emailVerifiedAt: true,
             },
         });
 
         if (!user) throw new AppError(404, 'User not found', 'USER_NOT_FOUND');
-        return user;
+        return {
+            ...user,
+            isEmailVerified: !!user.emailVerifiedAt,
+        };
     }
 
     // 7. Forgot Password Request
@@ -323,4 +335,144 @@ export class AuthService {
         return { message: 'Password has been set successfully.' };
     }
 
+    // 9. Update Profile Photo & Facial Enrollment Metadata
+    static async updateProfilePhoto(userId: string, photoBase64: string, mimeType: string = 'image/jpeg') {
+        const cleanBase64 = photoBase64.replace(/^data:image\/\w+;base64,/, '');
+        const photoBuffer = Buffer.from(cleanBase64, 'base64');
+        const photoHash = sha256(photoBuffer.toString('hex'));
+        const photoRef = `uploads/profiles/${userId}_${Date.now()}.jpg`;
+
+        const updatedUser = await prisma.user.update({
+            where: { id: userId },
+            data: {
+                profilePhotoRef: photoRef,
+                profilePhotoSha256: photoHash,
+                profilePhotoMime: mimeType,
+                profilePhotoEnrolledAt: new Date(),
+            },
+            select: {
+                id: true,
+                email: true,
+                firstName: true,
+                lastName: true,
+                role: true,
+                profilePhotoRef: true,
+                profilePhotoEnrolledAt: true,
+            },
+        });
+
+        return updatedUser;
+    }
+
+    // 10. Send / Resend Email Verification Link
+    static async requestEmailVerification(emailOrUserId: string) {
+        const user = await prisma.user.findFirst({
+            where: {
+                OR: [
+                    { email: emailOrUserId.toLowerCase() },
+                    { id: emailOrUserId },
+                ],
+            },
+        });
+
+        if (!user) {
+            return { message: 'If an account exists, a verification link has been sent.' };
+        }
+
+        if (user.emailVerifiedAt) {
+            return { message: 'Email address is already verified.' };
+        }
+
+        const rawToken = crypto.randomBytes(32).toString('hex');
+        const tokenHash = sha256(rawToken);
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+        await prisma.refreshToken.create({
+            data: {
+                userId: user.id,
+                tokenHash,
+                familyId: 'EMAIL_VERIFICATION',
+                expiresAt,
+            },
+        });
+
+        EmailService.sendEmailVerification(user.email, rawToken).catch(console.error);
+
+        return {
+            message: 'Verification link sent to email address.',
+            token: rawToken,
+        };
+    }
+
+    // 11. Verify Email with Token
+    static async verifyEmail(token: string) {
+        const tokenHash = sha256(token.trim());
+
+        const record = await prisma.refreshToken.findUnique({
+            where: { tokenHash },
+            include: { user: true },
+        });
+
+        if (!record || record.familyId !== 'EMAIL_VERIFICATION' || record.expiresAt < new Date() || record.revokedAt) {
+            throw new AppError(400, 'Invalid or expired email verification token', 'INVALID_VERIFICATION_TOKEN');
+        }
+
+        const updatedUser = await prisma.$transaction(async (tx) => {
+            const user = await tx.user.update({
+                where: { id: record.userId },
+                data: {
+                    emailVerifiedAt: new Date(),
+                    status: 'ACTIVE',
+                },
+            });
+
+            await tx.refreshToken.update({
+                where: { id: record.id },
+                data: { revokedAt: new Date() },
+            });
+
+            return user;
+        });
+
+        const { token: newAccessToken } = generateAccessToken(updatedUser.id, updatedUser.role, true);
+
+        return {
+            message: 'Email address verified successfully.',
+            user: {
+                id: updatedUser.id,
+                email: updatedUser.email,
+                firstName: updatedUser.firstName,
+                lastName: updatedUser.lastName,
+                role: updatedUser.role,
+                isEmailVerified: true,
+            },
+            accessToken: newAccessToken,
+        };
+    }
+
+    // 12. Direct One-Click Email Verify
+    static async verifyEmailDirect(userId: string) {
+        const user = await prisma.user.update({
+            where: { id: userId },
+            data: {
+                emailVerifiedAt: new Date(),
+                status: 'ACTIVE',
+            },
+        });
+
+        const { token: newAccessToken } = generateAccessToken(user.id, user.role, true);
+
+        return {
+            message: 'Email address verified successfully.',
+            user: {
+                id: user.id,
+                email: user.email,
+                firstName: user.firstName,
+                lastName: user.lastName,
+                role: user.role,
+                isEmailVerified: true,
+            },
+            accessToken: newAccessToken,
+        };
+    }
 }

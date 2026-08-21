@@ -6,6 +6,7 @@ import { Modal } from "@components/ui/Modal";
 import { Input } from "@components/ui/Input";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@components/ui/Table";
 import { UserPlus, Mail, ShieldCheck, CheckCircle2, Clock, Trash2 } from "lucide-react";
+import { useCreateTeacherInvitationMutation } from "@/redux/services/bootstrapApi";
 
 interface TeacherInvitation {
   id: string;
@@ -15,6 +16,7 @@ interface TeacherInvitation {
 }
 
 export const OwnerConsoleScreen: React.FC = () => {
+  const [createTeacherInvitation, { isLoading }] = useCreateTeacherInvitationMutation();
   const [invitations, setInvitations] = useState<TeacherInvitation[]>([
     {
       id: "inv-01",
@@ -22,37 +24,33 @@ export const OwnerConsoleScreen: React.FC = () => {
       status: "Issued",
       expiresIn: "7 days",
     },
-    {
-      id: "inv-02",
-      email: "professor.smith@institution.edu",
-      status: "Issued",
-      expiresIn: "5 days",
-    },
   ]);
 
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [newTeacherEmail, setNewTeacherEmail] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSendInvite = (e: React.FormEvent) => {
+  const handleSendInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTeacherEmail) return;
 
-    setIsLoading(true);
-    setTimeout(() => {
+    setError(null);
+    try {
+      const response = await createTeacherInvitation({ email: newTeacherEmail }).unwrap();
       setInvitations((prev) => [
         {
-          id: `inv-${Date.now()}`,
+          id: response.token || `inv-${Date.now()}`,
           email: newTeacherEmail,
           status: "Issued",
           expiresIn: "7 days",
         },
         ...prev,
       ]);
-      setIsLoading(false);
       setNewTeacherEmail("");
       setIsInviteModalOpen(false);
-    }, 400);
+    } catch (err: any) {
+      setError(err.data?.message || err.message || "Failed to create teacher invitation.");
+    }
   };
 
   const handleRevoke = (id: string) => {
