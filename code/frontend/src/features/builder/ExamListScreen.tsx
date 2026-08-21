@@ -40,19 +40,14 @@ export const ExamListScreen: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
 
   // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(
+    () => new URLSearchParams(location.search).get("create") === "true"
+  );
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [accessPolicy, setAccessPolicy] = useState<"PUBLIC" | "INVITATION_ONLY" | "APPROVAL_REQUIRED">("INVITATION_ONLY");
   const [timingMode, setTimingMode] = useState<"WHOLE_PAPER" | "SECTION_TIMED" | "QUESTION_TIMED" | "MIXED">("WHOLE_PAPER");
   const [durationMinutes, setDurationMinutes] = useState<number>(120);
-
-  React.useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (params.get("create") === "true") {
-      setIsModalOpen(true);
-    }
-  }, [location.search]);
 
   const handleCreateExam = async (e: React.FormEvent) => {
     e.preventDefault();

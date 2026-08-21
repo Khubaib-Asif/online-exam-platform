@@ -76,12 +76,6 @@ export const ExamBuilderScreen: React.FC = () => {
   const isPublished = apiDetails?.status === "PUBLISHED";
   const [examTitle, setExamTitle] = useState("");
 
-  useEffect(() => {
-    if (apiDetails?.title) {
-      setExamTitle(apiDetails.title);
-    }
-  }, [apiDetails]);
-
   // Section Modal State
   const [isSectionModalOpen, setIsSectionModalOpen] = useState(false);
   const [newSectionTitle, setNewSectionTitle] = useState("");
@@ -172,7 +166,7 @@ export const ExamBuilderScreen: React.FC = () => {
     if (!targetSectionId || !qPrompt.trim()) return;
 
     try {
-      let payload: any = {
+      const payload: any = {
         type: qType,
         content: qPrompt.trim(),
         marks: qMarks,

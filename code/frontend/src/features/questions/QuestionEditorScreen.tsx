@@ -56,7 +56,7 @@ export const QuestionEditorScreen: React.FC = () => {
     if ((type as string) === "SHORT_ANSWER") mappedType = "SHORT";
     if ((type as string) === "LONG_ANSWER") mappedType = "LONG";
 
-    let payload: any = {
+    const payload: any = {
       type: mappedType,
       content: prompt,
       marks,

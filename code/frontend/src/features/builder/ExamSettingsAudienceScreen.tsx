@@ -78,7 +78,8 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
 
   // Sync state with fetched database record
   useEffect(() => {
-    if (apiDetails) {
+    if (!apiDetails) return;
+    const timer = setTimeout(() => {
       if (apiDetails.timingMode) setTimingMode(apiDetails.timingMode as any);
       if (apiDetails.paperDurationSeconds) setPaperDuration(Math.round(apiDetails.paperDurationSeconds / 60));
       if (apiDetails.accessPolicy) setRegistrationPolicy(apiDetails.accessPolicy as any);
@@ -95,7 +96,8 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
       if (apiDetails.closesAt) {
         setClosesAt(new Date(apiDetails.closesAt).toISOString().slice(0, 16));
       }
-    }
+    }, 0);
+    return () => clearTimeout(timer);
   }, [apiDetails]);
 
   const handleSaveSettings = async (e: React.FormEvent) => {

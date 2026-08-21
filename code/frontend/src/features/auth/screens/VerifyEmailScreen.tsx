@@ -13,16 +13,15 @@ export const VerifyEmailScreen: React.FC = () => {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
 
-  const [verifyEmail, { isLoading }] = useVerifyEmailMutation();
-  const [status, setStatus] = useState<"VERIFYING" | "SUCCESS" | "ERROR">("VERIFYING");
-  const [errorMessage, setErrorMessage] = useState("");
+  const [status, setStatus] = useState<"VERIFYING" | "SUCCESS" | "ERROR">(
+    token ? "VERIFYING" : "ERROR"
+  );
+  const [errorMessage, setErrorMessage] = useState(
+    token ? "" : "No email verification token provided in link."
+  );
 
   useEffect(() => {
-    if (!token) {
-      setStatus("ERROR");
-      setErrorMessage("No email verification token provided in link.");
-      return;
-    }
+    if (!token) return;
 
     const runVerification = async () => {
       try {

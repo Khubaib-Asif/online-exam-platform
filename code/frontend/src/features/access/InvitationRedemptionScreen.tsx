@@ -15,12 +15,6 @@ export const InvitationRedemptionScreen: React.FC = () => {
   const [status, setStatus] = useState<"IDLE" | "LOADING" | "SUCCESS" | "ERROR">("IDLE");
   const [errorMessage, setErrorMessage] = useState("");
 
-  useEffect(() => {
-    if (initialCode) {
-      setCode(initialCode);
-    }
-  }, [initialCode]);
-
   const handleRedeem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!code.trim()) {
