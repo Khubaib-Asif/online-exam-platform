@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { ExamBuilderController } from '../controllers/examBuilder.controller';
 import { authenticate, requireRole } from '../middlewares/auth.middleware';
+import { generalApiLimiter } from '../middlewares/rateLimiter.middleware';
 
 const router = Router();
 
-// All M4 routes require login authentication and strict TEACHER role
+// All M4 routes require rate limiting, login authentication and strict TEACHER role
+router.use(generalApiLimiter);
 router.use(authenticate);
 router.use(requireRole('TEACHER'));
 

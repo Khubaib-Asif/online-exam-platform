@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { QuestionBankController } from '../controllers/questionBank.controller';
 import { authenticate, requireRole } from '../middlewares/auth.middleware';
+import { generalApiLimiter } from '../middlewares/rateLimiter.middleware';
 
 const router = Router();
 
-// All M3 routes require authentication and TEACHER role
+// All M3 routes require rate limiting, authentication and TEACHER role
+router.use(generalApiLimiter);
 router.use(authenticate);
 router.use(requireRole('TEACHER'));
 

@@ -2,9 +2,11 @@ import { Router } from 'express';
 import { DeviceController } from '../controllers/device.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 import { requireVerifiedEmail } from '../middlewares/requireVerifiedEmail';
+import { generalApiLimiter } from '../middlewares/rateLimiter.middleware';
 
 const router = Router();
 
+router.use(generalApiLimiter);
 router.use(authenticate); // All device routes require login
 
 router.get('/devices', DeviceController.getDevices);

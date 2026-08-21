@@ -2,10 +2,12 @@ import { Router } from 'express';
 import { RegistrationController } from '../controllers/registration.controller';
 import { authenticate, requireRole } from '../middlewares/auth.middleware';
 import { requireVerifiedEmail } from '../middlewares/requireVerifiedEmail';
+import { generalApiLimiter } from '../middlewares/rateLimiter.middleware';
 
 const router = Router();
 
-// All M2 routes require login authentication
+// All M2 routes require rate limiting & login authentication
+router.use(generalApiLimiter);
 router.use(authenticate);
 
 // Student & General Discovery Routes
