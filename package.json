@@ -15,5 +15,8 @@
   },
   "dependencies": {
     "ts-api-utils": "2.0.1"
+  },
+  "overrides": {
+    "deepmerge-ts": "^8.0.0"
   }
 }
