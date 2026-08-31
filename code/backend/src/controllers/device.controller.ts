@@ -31,7 +31,7 @@ export class DeviceController {
 
   static async revokeDevice(req: AuthRequest, res: Response, next: NextFunction) {
     try {
-      const deviceId = req.params.id;
+      const deviceId = req.params.id as string;
       const device = await DeviceService.revokeDevice(req.user!.id, deviceId);
       res.json({ data: device, message: 'Device revoked successfully' });
     } catch (error) {

@@ -17,10 +17,10 @@ export const comparePassword = async (password: string, hash: string): Promise<b
   return bcrypt.compare(password, hash);
 };
 
-export const generateAccessToken = (userId: string, role: string): { token: string; tokenId: string } => {
+export const generateAccessToken = (userId: string, role: string, isEmailVerified: boolean = false): { token: string; tokenId: string } => {
   const tokenId = crypto.randomUUID();
   const token = jwt.sign(
-    { sub: userId, role, jti: tokenId },
+    { sub: userId, role, jti: tokenId, isEmailVerified },
     env.JWT_SECRET,
     { expiresIn: env.ACCESS_TOKEN_TTL_SECONDS }
   );

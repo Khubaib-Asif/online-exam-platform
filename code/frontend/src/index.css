@@ -1,40 +1,8 @@
 @import "tailwindcss";
 
-/* Define Project Design Theme (Section 5: UI Guidelines) */
-@theme {
-  /* Neutrals / Grays */
-  --color-white: #ffffff;
-  --color-gray-50: #f8f9fa;
-  --color-gray-100: #ebf1f9;
-  --color-gray-200: #d6dbe0; /* Merged D6DBE1 and D6DBE0 */
-  --color-gray-400: #99a3af;
-  --color-gray-600: #667080;
-  --color-gray-700: #66717f;
-  --color-gray-800: #2e4059;
-  --color-gray-900: #1a2332;
-  --color-black: #000000;
-
-  /* Blues (Primary & Accents) */
-  --color-blue-100: #b2cce5;
-  --color-blue-300: #99b2d1;
-  --color-blue-400: #8099b2;
-  --color-blue-500: #4a6fa5;
-  --color-blue-600: #4a6ea6;
-  --color-blue-900: #0f141f;
-
-  /* Semantic Feedback */
-  --color-error: #d32c2c;
-  --color-success: #25a65b;
-  --color-destructive: #fdebeb;
-
-  /* Fixed Slate/Muted Blue */
-  --color-slate-blue: #668099;
-
-  /* Font Family */
-  --font-display: "Inter", sans-serif;
-
-  /* Typography Styles (Font Size / Line Height) */
-  --text-display-lg: 3.5625rem /* 57px */ 4rem; /* 64px */
-  --text-display-md: 2.8125rem /* 45px */ 3.25rem; /* 52px */
-  --text-display-sm: 2.25rem /* 36px */ 2.75rem; /* 44px */
+body {
+  margin: 0;
+  background-color: #f8fafc;
+  color: #0f172a;
+  font-family: 'Inter', system-ui, sans-serif;
 }

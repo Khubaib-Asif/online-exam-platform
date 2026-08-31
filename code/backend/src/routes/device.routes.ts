@@ -1,13 +1,17 @@
 import { Router } from 'express';
 import { DeviceController } from '../controllers/device.controller';
 import { authenticate } from '../middlewares/auth.middleware';
+import { requireVerifiedEmail } from '../middlewares/requireVerifiedEmail';
+import { generalApiLimiter } from '../middlewares/rateLimiter.middleware';
 
 const router = Router();
 
+router.use(generalApiLimiter);
 router.use(authenticate); // All device routes require login
 
 router.get('/devices', DeviceController.getDevices);
-router.post('/devices', DeviceController.registerDevice);
-router.post('/devices/:id/revoke', DeviceController.revokeDevice);
+// Device registration and revocation require the user's email to be verified
+router.post('/devices', requireVerifiedEmail, DeviceController.registerDevice);
+router.post('/devices/:id/revoke', requireVerifiedEmail, DeviceController.revokeDevice);
 
 export default router;
