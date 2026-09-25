@@ -11,7 +11,9 @@
     "typecheck": "npm run typecheck --workspace=code/frontend",
     "test:unit": "echo 'No isolated unit tests yet, skipping...' && exit 0",
     "test:integration": "npx vitest run code/frontend/integration-tests",
-    "build": "npm run build --workspace=code/frontend && npm run build --workspace=code/backend"
+    "build": "npm run build --workspace=code/frontend && npm run build --workspace=code/backend",
+    "dev:desktop": "npm --prefix code/desktop run dev",
+    "start:desktop": "npm --prefix code/desktop run start"
   },
   "dependencies": {
     "ts-api-utils": "2.0.1"

@@ -23,16 +23,35 @@ interface AuthState {
     };
 }
 
-const initialState: AuthState = {
-    user: null,
-    accessToken: null,
-    isAuthenticated: false,
-    bootstrapStatus: "UNINITIALISED",
-    deviceCap: {
-        activeDevices: 0,
-        maxDevices: 2,
-    },
+const getInitialAuthState = (): AuthState => {
+    let storedToken: string | null = null;
+    let storedUser: UserProfile | null = null;
+
+    if (typeof window !== 'undefined') {
+        try {
+            storedToken = localStorage.getItem('accessToken') || sessionStorage.getItem('accessToken');
+            const userJson = localStorage.getItem('user') || sessionStorage.getItem('user');
+            if (userJson) {
+                storedUser = JSON.parse(userJson);
+            }
+        } catch (e) {
+            console.warn('Failed to parse stored auth:', e);
+        }
+    }
+
+    return {
+        user: storedUser,
+        accessToken: storedToken,
+        isAuthenticated: !!(storedToken && storedUser),
+        bootstrapStatus: storedUser ? "INITIALISED" : "UNINITIALISED",
+        deviceCap: {
+            activeDevices: 0,
+            maxDevices: 2,
+        },
+    };
 };
+
+const initialState: AuthState = getInitialAuthState();
 
 const authSlice = createSlice({
     name: 'auth',
@@ -88,6 +107,12 @@ const authSlice = createSlice({
             state.accessToken = null;
             state.isAuthenticated = false;
             state.deviceCap.activeDevices = 0;
+            if (typeof window !== 'undefined') {
+                localStorage.removeItem('accessToken');
+                localStorage.removeItem('user');
+                sessionStorage.removeItem('accessToken');
+                sessionStorage.removeItem('user');
+            }
         },
     },
 });

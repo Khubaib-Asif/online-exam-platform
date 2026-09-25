@@ -1,0 +1,36 @@
+{
+  "name": "online-exam-launcher",
+  "version": "1.0.0",
+  "description": "Production-grade lightweight Electron lockdown shell for secure examination execution",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.onlineexam.lockdown",
+    "productName": "Online Exam Launcher",
+    "protocols": [
+      {
+        "name": "Online Exam Protocol",
+        "schemes": [
+          "examapp"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

@@ -5,6 +5,10 @@ import { bootstrapApi } from './services/bootstrapApi';
 import { registrationApi } from './services/registrationApi';
 import { questionBankApi } from './services/questionBankApi';
 import { examBuilderApi } from './services/examBuilderApi';
+import { gateApi } from './services/gateApi';
+import { sessionApi } from './services/sessionApi';
+import { proctoringApi } from './services/proctoringApi';
+import { gradingApi } from './services/gradingApi';
 import authReducer from './slices/authSlice';
 import examPlayerReducer from './slices/examPlayerSlice';
 import deviceReducer from './slices/deviceSlice';
@@ -20,6 +24,10 @@ export const store = configureStore({
         [registrationApi.reducerPath]: registrationApi.reducer,
         [questionBankApi.reducerPath]: questionBankApi.reducer,
         [examBuilderApi.reducerPath]: examBuilderApi.reducer,
+        [gateApi.reducerPath]: gateApi.reducer,
+        [sessionApi.reducerPath]: sessionApi.reducer,
+        [proctoringApi.reducerPath]: proctoringApi.reducer,
+        [gradingApi.reducerPath]: gradingApi.reducer,
     },
     middleware: (getDefaultMiddleware) =>
         getDefaultMiddleware()
@@ -28,7 +36,11 @@ export const store = configureStore({
             .concat(bootstrapApi.middleware)
             .concat(registrationApi.middleware)
             .concat(questionBankApi.middleware)
-            .concat(examBuilderApi.middleware),
+            .concat(examBuilderApi.middleware)
+            .concat(gateApi.middleware)
+            .concat(sessionApi.middleware)
+            .concat(proctoringApi.middleware)
+            .concat(gradingApi.middleware),
 });
 
 export type RootState = ReturnType<typeof store.getState>;

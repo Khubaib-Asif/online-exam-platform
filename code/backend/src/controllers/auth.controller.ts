@@ -108,6 +108,39 @@ export class AuthController {
         }
     }
 
+    static async refreshToken(req: Request, res: Response, next: NextFunction) {
+        try {
+            let rawToken = req.body?.refreshToken;
+            if (!rawToken && req.headers.cookie) {
+                const match = req.headers.cookie.match(/(?:^|;\s*)refreshToken=([^;]*)/);
+                if (match) {
+                    rawToken = decodeURIComponent(match[1]);
+                }
+            }
+
+            const userAgent = req.headers['user-agent'] as string | undefined;
+            const ipAddress = req.ip;
+
+            const result = await AuthService.refreshToken(rawToken, userAgent, ipAddress);
+
+            res.cookie('refreshToken', result.refreshToken, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'strict',
+                maxAge: 7 * 24 * 60 * 60 * 1000,
+            });
+
+            res.json({
+                data: {
+                    accessToken: result.accessToken,
+                    user: result.user,
+                },
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+
     static async getMe(req: AuthRequest, res: Response, next: NextFunction) {
         try {
             const user = await AuthService.getMe(req.user!.id);
@@ -173,13 +206,12 @@ export class AuthController {
         }
     }
 
-    static async verifyEmailDirect(req: AuthRequest, res: Response, next: NextFunction) {
+    static async logout(req: Request, res: Response, next: NextFunction) {
         try {
-            const userId = req.user!.id;
-            const result = await AuthService.verifyEmailDirect(userId);
-            res.json({ data: result, message: result.message });
+            res.clearCookie('refreshToken');
+            res.json({ message: 'Logged out successfully' });
         } catch (error) {
             next(error);
         }
     }
-}
+}

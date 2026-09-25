@@ -7,10 +7,11 @@ import {
     useNavigate,
     useLocation
 } from "react-router-dom";
-import { useAppSelector } from "@redux/hooks";
-import { type SystemRole } from "@redux/slices/authSlice";
+import { useAppSelector, useAppDispatch } from "@redux/hooks";
+import { type SystemRole, setAuth, setAccessToken } from "@redux/slices/authSlice";
 import { useGetDevicesQuery } from "@redux/services/deviceApi";
 import { useValidateResetTokenQuery } from "@redux/services/authApi";
+import { ElectronLockdownGuard } from "@components/guards/ElectronLockdownGuard";
 
 // M1 Auth & Identity Screens
 import {
@@ -129,27 +130,55 @@ const AuthGuard: React.FC<RouteGuardProps> = ({
     requireDevice = false
 }) => {
     const navigate = useNavigate();
+    const dispatch = useAppDispatch();
+    const [searchParams] = useSearchParams();
     const { isAuthenticated, user, bootstrapStatus } = useAppSelector((state) => state.auth);
-    const { data: deviceData, isLoading: devicesLoading } = useGetDevicesQuery(undefined, {
-        skip: !isAuthenticated || !user || user.role !== "STUDENT",
-    });
     const location = useLocation();
+
+    // Check for auth token / user passed via deep link into Electron
+    const urlAuthToken = searchParams.get('auth');
+    const urlUserParam = searchParams.get('user');
+
+    useEffect(() => {
+        if (urlAuthToken) {
+            let parsedUser = null;
+            if (urlUserParam) {
+                try {
+                    parsedUser = JSON.parse(urlUserParam);
+                } catch (e) {
+                    console.warn("Failed to parse user from deep link:", e);
+                }
+            }
+            if (parsedUser) {
+                dispatch(setAuth({ user: parsedUser, accessToken: urlAuthToken }));
+                localStorage.setItem('accessToken', urlAuthToken);
+                localStorage.setItem('user', JSON.stringify(parsedUser));
+            } else {
+                dispatch(setAccessToken(urlAuthToken));
+                localStorage.setItem('accessToken', urlAuthToken);
+            }
+        }
+    }, [urlAuthToken, urlUserParam, dispatch]);
+
+    const isEffectivelyAuthenticated = isAuthenticated || !!urlAuthToken || !!(localStorage.getItem('accessToken') && localStorage.getItem('user'));
+
+    const { data: deviceData, isLoading: devicesLoading } = useGetDevicesQuery(undefined, {
+        skip: !isEffectivelyAuthenticated || !user || user.role !== "STUDENT",
+    });
 
     // Compute single redirect path (avoid setting state during render)
     let redirectPath: string | null = null;
-    // Build a stable redirect state using useMemo to avoid effect re-running every render
-    // (creating object literals inline would create a new reference each render)
     let redirectStateLocal: any = undefined;
 
     // 1. Check bootstrap status (only for unauthenticated users)
-    if (!isAuthenticated && bootstrapStatus === "UNINITIALISED") {
+    if (!isEffectivelyAuthenticated && bootstrapStatus === "UNINITIALISED") {
         if (location.pathname !== '/bootstrap') {
             redirectPath = '/bootstrap';
         }
     }
 
     // 2. Check authentication
-    if (!redirectPath && (!isAuthenticated || !user)) {
+    if (!redirectPath && !isEffectivelyAuthenticated) {
         if (location.pathname !== '/login') {
             redirectPath = '/login';
             redirectStateLocal = { from: location.pathname };
@@ -229,6 +258,10 @@ const PublicGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     }
 
     if (isAuthenticated && user) {
+        if (user.role !== "OWNER" && !user.isEmailVerified) {
+            return <Navigate to="/verify-email-nag" replace />;
+        }
+
         switch (user.role) {
             case "OWNER":
                 return <Navigate to="/owner-console" replace />;
@@ -342,30 +375,9 @@ const DashboardDispatcher: React.FC = () => {
 
 
 /**
- * DeviceRegistrationWrapper - Ensures students have registered devices
+ * DeviceRegistrationWrapper - Provides device status context for students
  */
 const DeviceRegistrationWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const { user, isAuthenticated } = useAppSelector((state) => state.auth);
-    const { data: deviceData, isLoading } = useGetDevicesQuery(undefined, {
-        skip: !isAuthenticated || !user || user.role !== "STUDENT",
-    });
-
-    if (isLoading) {
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-gray-50">
-                <div className="text-center">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-                    <p className="mt-4 text-gray-600">Checking device status...</p>
-                </div>
-            </div>
-        );
-    }
-
-    // For students, check if device registration is needed
-    if (user?.role === "STUDENT" && deviceData && deviceData.activeCount === 0) {
-        return <Navigate to="/devices/register-action" replace />;
-    }
-
     return <>{children}</>;
 };
 
@@ -436,15 +448,15 @@ const router = createBrowserRouter([
 
     // M5 - Device & Security Gates
     { path: "/exam/:examId/launch", element: <AuthGuard allowedRoles={["STUDENT"]}><DownloadDesktopAppScreen /></AuthGuard> },
-    { path: "/exam/:examId/entry", element: <AuthGuard allowedRoles={["STUDENT"]}><SessionEntryScreen /></AuthGuard> },
-    { path: "/exam/:examId/gates", element: <AuthGuard allowedRoles={["STUDENT"]}><DeviceSecurityGatesScreen /></AuthGuard> },
-    { path: "/exam/:examId/gate-failed", element: <AuthGuard allowedRoles={["STUDENT"]}><GateFailureScreen /></AuthGuard> },
-    { path: "/devices/register-action", element: <AuthGuard allowedRoles={["STUDENT"]}><DeviceRegistrationScreen /></AuthGuard> },
+    { path: "/exam/:examId/entry", element: <AuthGuard allowedRoles={["STUDENT"]}><ElectronLockdownGuard><SessionEntryScreen /></ElectronLockdownGuard></AuthGuard> },
+    { path: "/exam/:examId/gates", element: <AuthGuard allowedRoles={["STUDENT"]}><ElectronLockdownGuard><DeviceSecurityGatesScreen /></ElectronLockdownGuard></AuthGuard> },
+    { path: "/exam/:examId/gate-failed", element: <AuthGuard allowedRoles={["STUDENT"]}><ElectronLockdownGuard><GateFailureScreen /></ElectronLockdownGuard></AuthGuard> },
+    { path: "/devices/register-action", element: <AuthGuard allowedRoles={["STUDENT"]}><ElectronLockdownGuard><DeviceRegistrationScreen /></ElectronLockdownGuard></AuthGuard> },
     { path: "/devices/revoke-confirm", element: <AuthGuard allowedRoles={["STUDENT"]}><RevokeDeviceConfirmationScreen /></AuthGuard> },
 
     // M6 - Exam Session Orchestration
-    { path: "/exam/:examId/live", element: <AuthGuard allowedRoles={["STUDENT"]}><LiveExamSessionScreen /></AuthGuard> },
-    { path: "/exam/:examId/reconnect", element: <AuthGuard allowedRoles={["STUDENT"]}><ReconnectScreen /></AuthGuard> },
+    { path: "/exam/:examId/live", element: <AuthGuard allowedRoles={["STUDENT"]}><ElectronLockdownGuard><LiveExamSessionScreen /></ElectronLockdownGuard></AuthGuard> },
+    { path: "/exam/:examId/reconnect", element: <AuthGuard allowedRoles={["STUDENT"]}><ElectronLockdownGuard><ReconnectScreen /></ElectronLockdownGuard></AuthGuard> },
     { path: "/exam/:examId/terminated", element: <AuthGuard allowedRoles={["STUDENT"]}><AttemptTerminatedScreen /></AuthGuard> },
     { path: "/exam/:examId/submitted", element: <AuthGuard allowedRoles={["STUDENT"]}><SubmissionConfirmationScreen /></AuthGuard> },
     { path: "/exam/:examId/complete", element: <AuthGuard allowedRoles={["STUDENT"]}><AttemptCompleteScreen /></AuthGuard> },
@@ -485,5 +497,6 @@ export {
     PublicGuard,
     ResetPasswordGuard,
     DashboardDispatcher,
-    DeviceRegistrationWrapper
+    DeviceRegistrationWrapper,
+    ElectronLockdownGuard
 };

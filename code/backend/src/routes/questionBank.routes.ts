@@ -5,22 +5,17 @@ import { generalApiLimiter } from '../middlewares/rateLimiter.middleware';
 
 const router = Router();
 
-// All M3 routes require rate limiting, authentication and TEACHER role
-router.use(generalApiLimiter);
-router.use(authenticate);
-router.use(requireRole('TEACHER'));
-
-// Question Bank Routes
-router.get('/question-banks', QuestionBankController.getQuestionBanks);
-router.post('/question-banks', QuestionBankController.createQuestionBank);
-router.get('/question-banks/:id/questions', QuestionBankController.getBankQuestions);
-router.post('/question-banks/:id/questions', QuestionBankController.createQuestion);
-router.post('/question-banks/:id/import', QuestionBankController.importQuestions);
+// Question Bank Routes - Rate limited, Authenticated, and Teacher-only
+router.get('/question-banks', generalApiLimiter, authenticate, requireRole('TEACHER'), QuestionBankController.getQuestionBanks);
+router.post('/question-banks', generalApiLimiter, authenticate, requireRole('TEACHER'), QuestionBankController.createQuestionBank);
+router.get('/question-banks/:id/questions', generalApiLimiter, authenticate, requireRole('TEACHER'), QuestionBankController.getBankQuestions);
+router.post('/question-banks/:id/questions', generalApiLimiter, authenticate, requireRole('TEACHER'), QuestionBankController.createQuestion);
+router.post('/question-banks/:id/import', generalApiLimiter, authenticate, requireRole('TEACHER'), QuestionBankController.importQuestions);
 
 // Question Level & Version Routes
-router.get('/questions/:id', QuestionBankController.getQuestionDetails);
-router.put('/questions/:id', QuestionBankController.updateQuestion);
-router.post('/questions/:id/toggle-active', QuestionBankController.toggleQuestionActive);
-router.delete('/tags/:tagName', QuestionBankController.deleteTag);
+router.get('/questions/:id', generalApiLimiter, authenticate, requireRole('TEACHER'), QuestionBankController.getQuestionDetails);
+router.put('/questions/:id', generalApiLimiter, authenticate, requireRole('TEACHER'), QuestionBankController.updateQuestion);
+router.post('/questions/:id/toggle-active', generalApiLimiter, authenticate, requireRole('TEACHER'), QuestionBankController.toggleQuestionActive);
+router.delete('/tags/:tagName', generalApiLimiter, authenticate, requireRole('TEACHER'), QuestionBankController.deleteTag);
 
 export default router;

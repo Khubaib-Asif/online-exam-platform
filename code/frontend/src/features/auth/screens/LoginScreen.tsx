@@ -46,13 +46,8 @@ export const LoginScreen: React.FC = () => {
                     user: response.user,
                     accessToken: response.accessToken,
                 }));
-                if (formData.keepSignedIn) {
-                    localStorage.setItem("accessToken", response.accessToken);
-                } else {
-                    sessionStorage.setItem("accessToken", response.accessToken);
-                }
-                console.log("Login attempt with email:", formData.email, "and role:", formData.selectedRole);
-                console.log("Response from login mutation:", response);
+                localStorage.setItem("accessToken", response.accessToken);
+                localStorage.setItem("user", JSON.stringify(response.user));
                 navigate("/dashboard");
             })
             .catch((err) => {

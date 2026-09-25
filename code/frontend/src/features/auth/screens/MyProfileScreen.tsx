@@ -1,7 +1,7 @@
 import React from "react";
 import { AppLayout } from "@components/layout/AppLayout";
 import { logout } from "@redux/slices/authSlice";
-import { useAppSelector } from "@/redux/hooks";
+import { useAppSelector, useAppDispatch } from "@/redux/hooks";
 import { Badge } from "@components/ui/Badge";
 import { Button } from "@components/ui/Button";
 import { CheckCircle2, LogOut, Mail, User, Smartphone, Key } from "lucide-react";
@@ -10,20 +10,19 @@ import { useLogoutMutation } from "@/redux/services/authApi";
 
 export const MyProfileScreen: React.FC = () => {
     const { user } = useAppSelector((state) => state.auth);
+    const dispatch = useAppDispatch();
     const navigate = useNavigate();
     const [logoutMutation] = useLogoutMutation();
 
-    const handleSignOut = () => {
-        logoutMutation()
-            .unwrap()
-            .then(() => {
-                logout(); // Clear user data from Redux store
-                navigate("/login");
-            })
-            .catch((error) => {
-                console.error("Logout failed:", error);
-                // Handle error if needed
-            });
+    const handleSignOut = async () => {
+        try {
+            await logoutMutation().unwrap();
+        } catch (error) {
+            console.warn("Logout failed:", error);
+        } finally {
+            dispatch(logout());
+            navigate("/login", { replace: true });
+        }
     };
 
     const name = user?.fullName || "John Doe";
