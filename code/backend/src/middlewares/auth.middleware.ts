@@ -32,7 +32,7 @@ export const authenticate = async (req: AuthRequest, res: Response, next: NextFu
             return next(new AppError(401, 'Invalid or disabled account', 'AUTH_INVALID'));
         }
 
-        req.user = { id: user.id, email: user.email, role: user.role as UserRole, isEmailVerified: !!user.emailVerifiedAt };
+        req.user = { id: user.id, email: user.email, role: user.role as UserRole, isEmailVerified: !!user.emailVerifiedAt || user.status === 'ACTIVE' };
         next();
     } catch (error) {
         return next(new AppError(401, 'Invalid or expired token', 'AUTH_INVALID'));

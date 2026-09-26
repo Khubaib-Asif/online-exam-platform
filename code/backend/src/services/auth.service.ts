@@ -241,6 +241,66 @@ export class AuthService {
         };
     }
 
+    // 5b. Refresh Access Token (Token Rotation)
+    static async refreshToken(rawToken?: string, userAgent?: string, ipAddress?: string) {
+        if (!rawToken) {
+            throw new AppError(401, 'Refresh token required', 'REFRESH_TOKEN_REQUIRED');
+        }
+
+        const tokenHash = sha256(rawToken);
+        const record = await prisma.refreshToken.findUnique({
+            where: { tokenHash },
+            include: { user: true },
+        });
+
+        if (!record || record.expiresAt < new Date() || record.revokedAt) {
+            throw new AppError(401, 'Invalid or expired refresh token', 'INVALID_REFRESH_TOKEN');
+        }
+
+        if (record.user.status !== 'ACTIVE') {
+            throw new AppError(403, 'Account is not active', 'ACCOUNT_INACTIVE');
+        }
+
+        // Token rotation: revoke old token and create new
+        const newRefreshTokenRaw = crypto.randomBytes(32).toString('hex');
+        const newRefreshTokenHash = sha256(newRefreshTokenRaw);
+        const refreshExpiresAt = new Date(Date.now() + env.REFRESH_TOKEN_TTL_SECONDS * 1000);
+
+        const isVerified = !!record.user.emailVerifiedAt;
+        const { token: newAccessToken, tokenId } = generateAccessToken(record.user.id, record.user.role, isVerified);
+
+        await prisma.$transaction(async (tx) => {
+            await tx.refreshToken.update({
+                where: { id: record.id },
+                data: { revokedAt: new Date() },
+            });
+
+            await tx.refreshToken.create({
+                data: {
+                    userId: record.user.id,
+                    tokenHash: newRefreshTokenHash,
+                    familyId: record.familyId || tokenId,
+                    expiresAt: refreshExpiresAt,
+                    userAgent,
+                    ipAddress,
+                },
+            });
+        });
+
+        return {
+            accessToken: newAccessToken,
+            refreshToken: newRefreshTokenRaw,
+            user: {
+                id: record.user.id,
+                email: record.user.email,
+                firstName: record.user.firstName,
+                lastName: record.user.lastName,
+                role: record.user.role,
+                isEmailVerified: isVerified,
+            },
+        };
+    }
+
     // 6. Get Current Safe Profile
     static async getMe(userId: string) {
         const user = await prisma.user.findUnique({

@@ -19,6 +19,12 @@ const EnvSchema = z.object({
   SMTP_PASS: z.string().optional().default(''),
   EMAIL_FROM: z.string().default('noreply@onlineexamplatform.com'),
   FRONTEND_URL: z.string().default('http://localhost:3000'),
+
+  // AI & Subjective Grading Configuration
+  OPENROUTER_API_KEY: z.string().optional().default(''),
+  OPENROUTER_MODEL: z.string().default('openrouter/free'),
+  GEMINI_API_KEY: z.string().optional().default(''),
+  OPENAI_API_KEY: z.string().optional().default(''),
 });
 
 export const env = EnvSchema.parse(process.env);

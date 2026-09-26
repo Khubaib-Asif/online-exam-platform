@@ -3,11 +3,11 @@ import { AppError } from '../utils/appError';
 import crypto from 'crypto';
 
 export class DeviceService {
-  // 1. Get User Devices (Returns max 2 active devices, flags `isCurrent`)
-  static async getUserDevices(userId: string, currentDeviceId?: string) {
+  // 1. Get User Devices (Telegram-style: returns active devices only, deduplicates fingerprints, separates history)
+  static async getUserDevices(userId: string, currentFingerprintOrId?: string) {
     const devices = await prisma.device.findMany({
       where: { userId },
-      orderBy: { registeredAt: 'desc' },
+      orderBy: { lastSeenAt: 'desc' },
       select: {
         id: true,
         label: true,
@@ -16,28 +16,70 @@ export class DeviceService {
         status: true,
         lastSeenAt: true,
         registeredAt: true,
+        revokedAt: true,
+        fingerprintHash: true,
       },
     });
 
-    const activeCount = devices.filter((d) => d.status === 'ACTIVE').length;
+    const activeList = devices.filter((d) => d.status === 'ACTIVE');
+    const revokedList = devices.filter((d) => d.status === 'REVOKED');
 
-    const formattedDevices = devices.map((device) => ({
+    // Deduplicate active devices by fingerprintHash if duplicates existed
+    const uniqueActive: typeof activeList = [];
+    const seenFingerprints = new Set<string>();
+
+    for (const d of activeList) {
+      if (!seenFingerprints.has(d.fingerprintHash)) {
+        seenFingerprints.add(d.fingerprintHash);
+        uniqueActive.push(d);
+      } else {
+        // Mark stale duplicate as revoked in background
+        prisma.device.update({
+          where: { id: d.id },
+          data: { status: 'REVOKED', revokedAt: new Date() },
+        }).catch(() => {});
+      }
+    }
+
+    const formattedActive = uniqueActive.map((device, index) => {
+      const isCurrent = currentFingerprintOrId
+        ? device.id === currentFingerprintOrId || device.fingerprintHash === currentFingerprintOrId
+        : index === 0;
+
+      return {
+        id: device.id,
+        name: device.label || `${device.platform} Enclave`,
+        os: device.platform,
+        appVersion: device.appVersion,
+        lastSeen: device.lastSeenAt,
+        registeredAt: device.registeredAt,
+        isActive: true,
+        isCurrent,
+      };
+    });
+
+    const formattedRevoked = revokedList.map((device) => ({
       id: device.id,
       name: device.label || `${device.platform} Device`,
       os: device.platform,
+      appVersion: device.appVersion,
       lastSeen: device.lastSeenAt,
-      isActive: device.status === 'ACTIVE',
-      isCurrent: currentDeviceId ? device.id === currentDeviceId : false,
+      registeredAt: device.registeredAt,
+      revokedAt: device.revokedAt,
+      isActive: false,
+      isCurrent: false,
     }));
 
     return {
-      devices: formattedDevices,
-      activeCount,
+      devices: formattedActive,
+      activeDevices: formattedActive,
+      revokedDevices: formattedRevoked,
+      activeCount: formattedActive.length,
       maxAllowed: 2,
     };
   }
 
-  // 2. Register a New Device (Enforces 2 Active Device Cap)
+  // 2. Register a New Device (Enforces 2 Active Device Cap & Fingerprint Deduplication)
   static async registerDevice(userId: string, data: {
     label?: string;
     platform?: string;
@@ -48,6 +90,52 @@ export class DeviceService {
       // Lock user's device namespace to prevent race conditions
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
 
+      const fingerprint = data.fingerprintHash || crypto.randomBytes(32).toString('hex');
+
+      // Check if a device with this fingerprint already exists for this user
+      const existingDevice = await tx.device.findFirst({
+        where: { userId, fingerprintHash: fingerprint },
+      });
+
+      if (existingDevice) {
+        // If already active, update lastSeenAt and return
+        if (existingDevice.status === 'ACTIVE') {
+          return tx.device.update({
+            where: { id: existingDevice.id },
+            data: {
+              lastSeenAt: new Date(),
+              label: data.label || existingDevice.label,
+              platform: data.platform || existingDevice.platform,
+              appVersion: data.appVersion || existingDevice.appVersion,
+            },
+          });
+        }
+
+        // If previously revoked, check active count before reactivating
+        const activeCount = await tx.device.count({
+          where: { userId, status: 'ACTIVE' },
+        });
+
+        if (activeCount >= 2) {
+          throw new AppError(
+            400,
+            'Device limit reached (Maximum 2 active devices allowed). Please revoke an existing device first.',
+            'DEVICE_LIMIT_EXCEEDED'
+          );
+        }
+
+        return tx.device.update({
+          where: { id: existingDevice.id },
+          data: {
+            status: 'ACTIVE',
+            revokedAt: null,
+            lastSeenAt: new Date(),
+            label: data.label || existingDevice.label,
+          },
+        });
+      }
+
+      // New device: check active count
       const activeCount = await tx.device.count({
         where: { userId, status: 'ACTIVE' },
       });
@@ -61,17 +149,16 @@ export class DeviceService {
       }
 
       const keyThumbprint = crypto.randomBytes(16).toString('hex');
-      const fingerprint = data.fingerprintHash || crypto.randomBytes(32).toString('hex');
 
       const newDevice = await tx.device.create({
         data: {
           userId,
-          label: data.label || 'Web Device',
-          platform: data.platform || 'Web',
+          label: data.label || 'Windows Desktop Enclave',
+          platform: data.platform || 'Electron',
           appVersion: data.appVersion || '1.0.0',
           fingerprintHash: fingerprint,
           publicKeyThumbprint: keyThumbprint,
-          publicKeyJwkEncrypted: 'web-managed-key',
+          publicKeyJwkEncrypted: 'desktop-secure-enclave',
           status: 'ACTIVE',
         },
       });
@@ -115,5 +202,24 @@ export class DeviceService {
     });
 
     return updatedDevice;
+  }
+
+  // 4. Revoke All Other Devices (Telegram-style Terminate All Other Sessions)
+  static async revokeAllOtherDevices(userId: string, currentDeviceId?: string) {
+    const devices = await prisma.device.findMany({
+      where: { userId, status: 'ACTIVE' },
+    });
+
+    const toRevoke = devices.filter((d) => d.id !== currentDeviceId);
+    const ids = toRevoke.map((d) => d.id);
+
+    if (ids.length > 0) {
+      await prisma.device.updateMany({
+        where: { id: { in: ids } },
+        data: { status: 'REVOKED', revokedAt: new Date() },
+      });
+    }
+
+    return { revokedCount: ids.length, success: true };
   }
 }

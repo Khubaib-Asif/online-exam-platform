@@ -16,13 +16,24 @@ export interface LockdownResult {
   error?: string;
 }
 
+export interface DeviceInfo {
+  hostname: string;
+  platform: string;
+  release?: string;
+  arch?: string;
+  cpu?: string;
+  label: string;
+}
+
 export interface ElectronBridge {
   readonly isElectron: boolean;
   getSystemFingerprint: () => Promise<string>;
   getAttestationToken: () => Promise<string>;
+  getDeviceInfo?: () => Promise<DeviceInfo>;
   enableLockdown: () => Promise<LockdownResult>;
   disableLockdown: () => Promise<LockdownResult>;
   getDisplayCount: () => Promise<number>;
+  closeExamShell?: () => Promise<{ success: boolean }>;
   onSecurityViolation: (
     callback: (event: SecurityViolationEvent) => void
   ) => () => void;

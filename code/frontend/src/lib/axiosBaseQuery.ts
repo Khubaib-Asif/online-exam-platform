@@ -115,12 +115,17 @@ api.interceptors.response.use(
                 }
             );
 
-            const newAccessToken = response.data.accessToken;
-            store.dispatch(setAccessToken(newAccessToken));
+            const newAccessToken = response.data?.data?.accessToken || response.data?.accessToken;
+            if (newAccessToken) {
+                store.dispatch(setAccessToken(newAccessToken));
+                if (typeof window !== 'undefined') {
+                    localStorage.setItem('accessToken', newAccessToken);
+                }
+            }
 
             processQueue(null, newAccessToken);
 
-            if (originalRequest.headers) {
+            if (originalRequest.headers && newAccessToken) {
                 originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
             }
             return api(originalRequest);
@@ -129,7 +134,16 @@ api.interceptors.response.use(
             processQueue(refreshError, null);
             store.dispatch(logout());
 
-            if (typeof window !== 'undefined') {
+            if (
+                typeof window !== 'undefined' &&
+                !window.location.pathname.startsWith('/login') &&
+                !window.location.pathname.startsWith('/signup') &&
+                !window.location.pathname.startsWith('/verify-email') &&
+                !window.location.pathname.startsWith('/forgot-password') &&
+                !window.location.pathname.startsWith('/reset-password') &&
+                !window.location.pathname.startsWith('/bootstrap') &&
+                window.location.pathname !== '/'
+            ) {
                 window.location.href = '/login?session=expired';
             }
 

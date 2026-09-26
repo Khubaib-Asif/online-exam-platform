@@ -1,12 +1,15 @@
 import React, { useState } from "react";
-import { Link } from "react-router-dom";
-import { useAppSelector } from "@redux/hooks";
+import { useNavigate } from "react-router-dom";
+import { useAppSelector, useAppDispatch } from "@redux/hooks";
+import { logout } from "@/redux/slices/authSlice";
 import { CredentialPanel } from "@components/credential-panel/CredentialPanel";
 import { Button } from "@components/ui/Button";
 import { ArrowLeft, RefreshCw, AlertCircle, CheckCircle2, Mail } from "lucide-react";
 import { useRequestEmailVerificationMutation } from "@/redux/services/authApi";
 
 export const VerifyEmailNagScreen: React.FC = () => {
+  const dispatch = useAppDispatch();
+  const navigate = useNavigate();
   const { user } = useAppSelector((state) => state.auth);
   const [requestVerification, { isLoading: isResending }] = useRequestEmailVerificationMutation();
 
@@ -27,6 +30,12 @@ export const VerifyEmailNagScreen: React.FC = () => {
         err.data?.message || err.data?.error?.message || "Failed to resend verification email."
       );
     }
+  };
+
+  const handleReturnToSignIn = (e: React.MouseEvent) => {
+    e.preventDefault();
+    dispatch(logout());
+    navigate("/login");
   };
 
   return (
@@ -72,13 +81,14 @@ export const VerifyEmailNagScreen: React.FC = () => {
           </Button>
 
           <div className="mt-4 pt-4 border-t border-slate-100 text-center">
-            <Link
-              to="/login"
-              className="inline-flex items-center gap-1.5 text-xs text-[#4C70A6] hover:underline font-semibold"
+            <button
+              type="button"
+              onClick={handleReturnToSignIn}
+              className="inline-flex items-center gap-1.5 text-xs text-[#4C70A6] hover:underline font-semibold cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Return to sign in</span>
-            </Link>
+            </button>
           </div>
         </div>
       </CredentialPanel>

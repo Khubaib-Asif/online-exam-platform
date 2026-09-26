@@ -12,6 +12,7 @@ export const VerifyEmailScreen: React.FC = () => {
   const token = searchParams.get("token") || "";
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
+  const [verifyEmail] = useVerifyEmailMutation();
 
   const [status, setStatus] = useState<"VERIFYING" | "SUCCESS" | "ERROR">(
     token ? "VERIFYING" : "ERROR"
@@ -114,7 +115,10 @@ export const VerifyEmailScreen: React.FC = () => {
                   variant="primary"
                   size="sm"
                   className="w-full"
-                  onClick={() => navigate("/login")}
+                  onClick={() => {
+                    dispatch(logout());
+                    navigate("/login");
+                  }}
                 >
                   Return to Sign In
                 </Button>

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { Badge } from "@components/ui/Badge";
 import { Button } from "@components/ui/Button";
 import {
@@ -7,204 +7,622 @@ import {
   Clock,
   ChevronRight,
   Wifi,
+  WifiOff,
+  AlertTriangle,
+  Loader2,
+  SkipForward,
   CheckCircle2,
-  AlertCircle,
 } from "lucide-react";
-
-export type ExamTimingMode = "WHOLE_PAPER" | "SECTION_TIMED" | "QUESTION_TIMED" | "MIXED";
+import {
+  useStartSessionMutation,
+  useSubmitQuestionMutation,
+  useSkipQuestionMutation,
+  useSubmitExamMutation,
+  useHeartbeatMutation,
+  type SessionProjection,
+} from "@/redux/services/sessionApi";
+import { useSendTelemetryMutation } from "@/redux/services/proctoringApi";
+import { nativeBridge } from "@/native-bridge/electronBridge";
 
 export const LiveExamSessionScreen: React.FC = () => {
   const { examId } = useParams<{ examId: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const targetExamId = examId || "";
 
-  // Configured timing mode for the exam (WHOLE_PAPER, SECTION_TIMED, QUESTION_TIMED)
-  const [timingMode, setTimingMode] = useState<ExamTimingMode>("SECTION_TIMED");
+  // Redux Mutations
+  const [startSession, { isLoading: isStarting }] = useStartSessionMutation();
+  const [submitQuestion, { isLoading: isSubmittingQuestion }] = useSubmitQuestionMutation();
+  const [skipQuestion, { isLoading: isSkippingQuestion }] = useSkipQuestionMutation();
+  const [submitExam, { isLoading: isSubmittingExam }] = useSubmitExamMutation();
+  const [heartbeat] = useHeartbeatMutation();
+  const [sendTelemetry] = useSendTelemetryMutation();
 
-  // Timers in seconds
-  const [paperSeconds, setPaperSeconds] = useState(7140); // 1h 59m
-  const [sectionSeconds, setSectionSeconds] = useState(659); // 10m 59s
-  const [questionSeconds, setQuestionSeconds] = useState(30); // 30s per question
+  // Active Session State
+  const [session, setSession] = useState<SessionProjection | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [selectedAnswer, setSelectedAnswer] = useState<any>(null);
+  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+  const [isFinalSubmitModalOpen, setIsFinalSubmitModalOpen] = useState(false);
 
-  const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  // Telemetry queue
+  const telemetryQueueRef = useRef<Array<{ eventId: string; eventType: string; occurredAtClientMs: number; metadata: any }>>([]);
 
-  const questions = [
-    {
-      id: "q-101",
-      sequence: 1,
-      section: "Section A: Consensus & Replication",
-      prompt: "In Paxos consensus, what is the minimum quorum size required for a cluster of N nodes?",
-      type: "MCQ" as const,
-      options: [
-        { id: "opt-1", text: "N / 2" },
-        { id: "opt-2", text: "floor(N / 2) + 1" },
-        { id: "opt-3", text: "N - 1" },
-        { id: "opt-4", text: "2 * N + 1" },
-      ],
-    },
-    {
-      id: "q-102",
-      sequence: 2,
-      section: "Section A: Consensus & Replication",
-      prompt: "Select all properties guaranteed by linearizability in distributed storage systems.",
-      type: "MSQ" as const,
-      options: [
-        { id: "opt-a", text: "Real-time ordering" },
-        { id: "opt-b", text: "Eventual consistency" },
-        { id: "opt-c", text: "Sequential consistency" },
-        { id: "opt-d", text: "Atomicity" },
-      ],
-    },
-    {
-      id: "q-104",
-      sequence: 3,
-      section: "Section B: System Design & Fault Tolerance",
-      prompt: "Explain the two-phase commit (2PC) protocol failure mode when the coordinator crashes.",
-      type: "SHORT_ANSWER" as const,
-    },
-  ];
+  // Authoritative countdown in seconds
+  const [paperSecondsRemaining, setPaperSecondsRemaining] = useState<number>(0);
+  const [sectionSecondsRemaining, setSectionSecondsRemaining] = useState<number | null>(null);
+  const [questionSecondsRemaining, setQuestionSecondsRemaining] = useState<number | null>(null);
 
-  const currentQ = questions[currentQuestionIdx];
-
-  // Master Timer Tick
+  const sessionRef = useRef<SessionProjection | null>(session);
   useEffect(() => {
-    const timer = setInterval(() => {
-      setPaperSeconds((p) => (p > 0 ? p - 1 : 0));
-      setSectionSeconds((s) => (s > 0 ? s - 1 : 0));
-      setQuestionSeconds((q) => {
-        if (q > 1) return q - 1;
-        // If QUESTION_TIMED and question timer reaches 0 -> Auto advance next question
-        if (timingMode === "QUESTION_TIMED") {
-          handleNextQuestion();
-          return 30; // Reset 30s for next question
+    sessionRef.current = session;
+  }, [session]);
+
+  const isSubmittingAction = isSubmittingQuestion || isSkippingQuestion || isSubmittingExam;
+
+  // Initialize Session on Mount
+  useEffect(() => {
+    if (!targetExamId) return;
+
+    const storedEntryToken =
+      localStorage.getItem(`entryToken_${targetExamId}`) ||
+      searchParams.get("entryToken") ||
+      "";
+
+    const init = async () => {
+      try {
+        setErrorMessage(null);
+        const res: any = await startSession({
+          examId: targetExamId,
+          entryToken: storedEntryToken,
+        }).unwrap();
+
+        const projection = res?.data !== undefined ? res.data : res;
+        if (!projection) {
+          throw new Error("Invalid session response received from server.");
         }
-        return 0;
+
+        setSession(projection);
+
+        if (projection.isComplete) {
+          if (projection.status === "TERMINATED") {
+            navigate(`/exam/${targetExamId}/terminated`);
+          } else {
+            navigate(`/exam/${targetExamId}/submitted`);
+          }
+        }
+      } catch (err: any) {
+        console.error("Failed to start or resume session:", err);
+        const msg =
+          err.data?.error?.message ||
+          err.data?.message ||
+          err.message ||
+          "Failed to start exam session. Please ensure all security gates passed.";
+        setErrorMessage(msg);
+      }
+    };
+
+    init();
+  }, [targetExamId, startSession, searchParams, navigate]);
+
+  // Sync Server Deadlines with Timers
+  useEffect(() => {
+    if (!session) return;
+
+    const computeRemaining = () => {
+      const now = Date.now();
+      if (session.paperDeadline) {
+        const pSec = Math.max(0, Math.floor((new Date(session.paperDeadline).getTime() - now) / 1000));
+        setPaperSecondsRemaining(pSec);
+      }
+      if (session.sectionDeadline) {
+        const sSec = Math.max(0, Math.floor((new Date(session.sectionDeadline).getTime() - now) / 1000));
+        setSectionSecondsRemaining(sSec);
+      } else {
+        setSectionSecondsRemaining(null);
+      }
+      if (session.questionDeadline) {
+        const qSec = Math.max(0, Math.floor((new Date(session.questionDeadline).getTime() - now) / 1000));
+        setQuestionSecondsRemaining(qSec);
+      } else {
+        setQuestionSecondsRemaining(null);
+      }
+    };
+
+    computeRemaining();
+  }, [session]);
+
+  // Master 1-second Local Countdown Clock
+  useEffect(() => {
+    if (!session || session.isComplete) return;
+
+    const interval = setInterval(() => {
+      setPaperSecondsRemaining((prev) => {
+        if (prev <= 1) {
+          handleAutoSubmitPaper();
+          return 0;
+        }
+        return prev - 1;
+      });
+
+      setSectionSecondsRemaining((prev) => {
+        if (prev === null) return null;
+        if (prev <= 1) {
+          handleAutoTimeoutQuestion();
+          return 0;
+        }
+        return prev - 1;
+      });
+
+      setQuestionSecondsRemaining((prev) => {
+        if (prev === null) return null;
+        if (prev <= 1) {
+          handleAutoTimeoutQuestion();
+          return 0;
+        }
+        return prev - 1;
       });
     }, 1000);
-    return () => clearInterval(timer);
-  }, [timingMode, currentQuestionIdx]);
 
-  const formatTimerDisplay = () => {
-    if (timingMode === "QUESTION_TIMED") {
-      return `${questionSeconds}s`;
+    return () => clearInterval(interval);
+  }, [session]);
+
+  // Periodic Heartbeat every 15 seconds
+  useEffect(() => {
+    if (!session?.sessionId || session.isComplete) return;
+
+    const hbInterval = setInterval(async () => {
+      try {
+        const res = await heartbeat(session.sessionId).unwrap();
+        if (res.status && res.status !== session.status) {
+          if (res.status === "TERMINATED") {
+            navigate(`/exam/${targetExamId}/terminated`);
+          } else if (res.status === "SUBMITTED" || res.status === "AUTO_SUBMITTED") {
+            navigate(`/exam/${targetExamId}/submitted`);
+          }
+        }
+      } catch (err) {
+        console.warn("Heartbeat error:", err);
+      }
+    }, 15000);
+
+    return () => clearInterval(hbInterval);
+  }, [session?.sessionId, session?.isComplete, session?.status, heartbeat, targetExamId, navigate]);
+
+  // Security Event Recorder & Immediate / Periodic Dispatcher
+  const recordSecurityEvent = useCallback(
+    (eventType: string, metadata: any = {}) => {
+      const eventId = `evt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const event = {
+        eventId,
+        eventType,
+        occurredAtClientMs: Date.now(),
+        metadata,
+      };
+      telemetryQueueRef.current.push(event);
+
+      const currentSession = sessionRef.current;
+      // Flush immediately on severe events
+      if (
+        currentSession?.sessionId &&
+        (eventType === "MULTIPLE_DISPLAYS" ||
+          eventType === "FULLSCREEN_EXIT" ||
+          eventType === "FORBIDDEN_KEYSTROKE")
+      ) {
+        sendTelemetry({
+          sessionId: currentSession.sessionId,
+          clientSequence: currentSession.clientSequence,
+          events: [event],
+        }).catch((e) => console.warn("Immediate telemetry flush warning:", e));
+      }
+    },
+    [sendTelemetry]
+  );
+
+  // Periodic Telemetry Batch Flush (Every 5 seconds)
+  useEffect(() => {
+    if (!session?.sessionId || session.isComplete) return;
+
+    const flushInterval = setInterval(() => {
+      if (telemetryQueueRef.current.length === 0) return;
+
+      const batch = [...telemetryQueueRef.current];
+      telemetryQueueRef.current = [];
+
+      sendTelemetry({
+        sessionId: session.sessionId,
+        clientSequence: session.clientSequence,
+        events: batch,
+      }).catch((err) => {
+        console.warn("Telemetry batch send warning:", err);
+        telemetryQueueRef.current.unshift(...batch);
+      });
+    }, 5000);
+
+    return () => clearInterval(flushInterval);
+  }, [session?.sessionId, session?.clientSequence, session?.isComplete, sendTelemetry]);
+
+  // Native & Browser Security Listeners (Lockdown Events)
+  useEffect(() => {
+    if (!session?.sessionId || session.isComplete) return;
+
+    // 1. Electron Native Violations
+    const unsubscribeNative = nativeBridge.onSecurityViolation?.((violation) => {
+      recordSecurityEvent(violation.type, { details: violation.details });
+    });
+
+    // 2. Tab Blur & Focus Loss
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        recordSecurityEvent("TAB_BLUR", { details: "Exam window hidden or switched to background." });
+      }
+    };
+
+    const handleWindowBlur = () => {
+      recordSecurityEvent("FOCUS_LOST", { details: "Window lost focus / task switch attempted." });
+    };
+
+    // 3. Fullscreen Exit
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement && !nativeBridge.isElectron) {
+        recordSecurityEvent("FULLSCREEN_EXIT", { details: "Candidate exited fullscreen exam environment." });
+      }
+    };
+
+    // 4. Clipboard & Context Menu Interception
+    const handleCopy = (e: ClipboardEvent) => {
+      e.preventDefault();
+      recordSecurityEvent("COPY_ATTEMPT", { details: "Clipboard copy attempt intercepted." });
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      recordSecurityEvent("CONTEXT_MENU", { details: "Right-click context menu intercepted." });
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", handleWindowBlur);
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("copy", handleCopy);
+    document.addEventListener("contextmenu", handleContextMenu);
+
+    return () => {
+      if (unsubscribeNative) unsubscribeNative();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("blur", handleWindowBlur);
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("copy", handleCopy);
+      document.removeEventListener("contextmenu", handleContextMenu);
+    };
+  }, [session?.sessionId, session?.isComplete, recordSecurityEvent]);
+
+  // Network Online / Offline Listeners
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => {
+      setIsOnline(false);
+      if (session?.sessionId) {
+        navigate(`/exam/${targetExamId}/reconnect?sessionId=${session.sessionId}`);
+      }
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [session?.sessionId, targetExamId, navigate]);
+
+  // Auto-submit when paper timer expires
+  const handleAutoSubmitPaper = useCallback(async () => {
+    if (!session?.sessionId || session.isComplete) return;
+    try {
+      const rawRes: any = await submitExam(session.sessionId).unwrap();
+      const res: SessionProjection = rawRes?.data !== undefined ? rawRes.data : rawRes;
+      setSession(res);
+      navigate(`/exam/${targetExamId}/submitted`);
+    } catch (e) {
+      navigate(`/exam/${targetExamId}/submitted`);
     }
-    if (timingMode === "SECTION_TIMED") {
-      const m = Math.floor(sectionSeconds / 60);
-      const s = sectionSeconds % 60;
-      return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+  }, [session, submitExam, targetExamId, navigate]);
+
+  // Auto-timeout for question / section timer
+  const handleAutoTimeoutQuestion = useCallback(async () => {
+    if (!session?.currentQuestion || isSubmittingAction) return;
+    try {
+      const rawRes: any = await submitQuestion({
+        sessionId: session.sessionId,
+        examQuestionId: session.currentQuestion.id,
+        answer: selectedAnswer || null,
+        clientSequence: session.clientSequence,
+      }).unwrap();
+      const res: SessionProjection = rawRes?.data !== undefined ? rawRes.data : rawRes;
+
+      setSession(res);
+      setSelectedAnswer(null);
+
+      if (res?.isComplete) {
+        navigate(`/exam/${targetExamId}/submitted`);
+      }
+    } catch (err) {
+      console.warn("Auto-timeout question submit error:", err);
     }
-    // WHOLE_PAPER
-    const h = Math.floor(paperSeconds / 3600);
-    const m = Math.floor((paperSeconds % 3600) / 60);
-    const s = paperSeconds % 60;
-    return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+  }, [session, selectedAnswer, isSubmittingAction, submitQuestion, targetExamId, navigate]);
+
+  // User Action: Submit Question and Advance Forward
+  const handleSubmitCurrentQuestion = async () => {
+    if (!session?.currentQuestion || !session.sessionId || isSubmittingAction) return;
+
+    try {
+      setErrorMessage(null);
+      const rawRes: any = await submitQuestion({
+        sessionId: session.sessionId,
+        examQuestionId: session.currentQuestion.id,
+        answer: selectedAnswer,
+        clientSequence: session.clientSequence,
+      }).unwrap();
+      const res: SessionProjection = rawRes?.data !== undefined ? rawRes.data : rawRes;
+
+      setSession(res);
+      setSelectedAnswer(null);
+
+      if (res?.isComplete) {
+        navigate(`/exam/${targetExamId}/submitted`);
+      }
+    } catch (err: any) {
+      console.error("Submit question error:", err);
+      const msg = err.data?.error?.message || err.data?.message || err.message || "Failed to submit answer.";
+      setErrorMessage(msg);
+    }
   };
 
-  const handleSelectOption = (qid: string, val: string) => {
-    setAnswers({ ...answers, [qid]: val });
-  };
+  // User Action: Skip Current Question
+  const handleSkipCurrentQuestion = async () => {
+    if (!session?.currentQuestion || !session.sessionId || isSubmittingAction) return;
 
-  const handleNextQuestion = () => {
-    if (currentQuestionIdx < questions.length - 1) {
-      setCurrentQuestionIdx((prev) => prev + 1);
-      setQuestionSeconds(30); // reset per-question timer
-    } else {
-      navigate(`/exam/${examId || "ex-401"}/submitted`);
+    try {
+      setErrorMessage(null);
+      const rawRes: any = await skipQuestion({
+        sessionId: session.sessionId,
+        examQuestionId: session.currentQuestion.id,
+        clientSequence: session.clientSequence,
+      }).unwrap();
+      const res: SessionProjection = rawRes?.data !== undefined ? rawRes.data : rawRes;
+
+      setSession(res);
+      setSelectedAnswer(null);
+
+      if (res?.isComplete) {
+        navigate(`/exam/${targetExamId}/submitted`);
+      }
+    } catch (err: any) {
+      console.error("Skip question error:", err);
+      const msg = err.data?.error?.message || err.data?.message || err.message || "Failed to skip question.";
+      setErrorMessage(msg);
     }
   };
+
+  // User Action: Submit Whole Exam
+  const handleFinalExamSubmit = async () => {
+    if (!session?.sessionId || isSubmittingAction) return;
+
+    try {
+      setErrorMessage(null);
+
+      // If there is an active current question, submit its answer first
+      if (session.currentQuestion) {
+        const rawRes: any = await submitQuestion({
+          sessionId: session.sessionId,
+          examQuestionId: session.currentQuestion.id,
+          answer: selectedAnswer !== undefined ? selectedAnswer : null,
+          clientSequence: session.clientSequence,
+        }).unwrap();
+
+        const res: SessionProjection = rawRes?.data !== undefined ? rawRes.data : rawRes;
+        setSelectedAnswer(null);
+
+        if (res?.isComplete) {
+          setSession(res);
+          setIsFinalSubmitModalOpen(false);
+          navigate(`/exam/${targetExamId}/submitted`);
+          return;
+        }
+      }
+
+      const res = await submitExam(session.sessionId).unwrap();
+      setSession(res);
+      setIsFinalSubmitModalOpen(false);
+      navigate(`/exam/${targetExamId}/submitted`);
+    } catch (err: any) {
+      console.error("Final submit error:", err);
+      setIsFinalSubmitModalOpen(false);
+      navigate(`/exam/${targetExamId}/submitted`);
+    }
+  };
+
+  // Format Timer Strings
+  const formatSeconds = (sec: number) => {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    if (h > 0) {
+      return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+    }
+    return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+  };
+
+  // Current Question helper
+  const currentQ = session?.currentQuestion;
+  const isLastQuestion =
+    session && session.totalQuestions > 0 && session.currentQuestionIndex === session.totalQuestions - 1;
+
+  if (isStarting) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 select-none font-sans">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="w-10 h-10 text-[#4C70A6] animate-spin" />
+          <h2 className="text-base font-bold text-slate-100">Initializing Exam Session...</h2>
+          <p className="text-xs text-slate-400 font-mono">
+            Verifying cryptographic entry token and synchronizing server time...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (errorMessage && !session) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 select-none font-sans">
+        <div className="max-w-md w-full bg-slate-800 border border-slate-700 rounded-md p-8 text-center flex flex-col items-center gap-5 shadow-xl">
+          <div className="w-12 h-12 rounded-full bg-red-900/50 text-red-400 flex items-center justify-center">
+            <AlertTriangle className="w-6 h-6" />
+          </div>
+          <div>
+            <h1 className="text-lg font-bold text-white">Session Initialization Failed</h1>
+            <p className="text-xs text-slate-400 mt-2 leading-relaxed">{errorMessage}</p>
+          </div>
+          <Button
+            variant="primary"
+            size="md"
+            className="w-full bg-[#4C70A6] hover:bg-[#3F5E8E]"
+            onClick={() => navigate(`/session/entry?examId=${targetExamId}`)}
+          >
+            Return to Security Gates
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans select-none">
       {/* Enterprise Dark Header Bar */}
       <header className="h-14 bg-slate-900 text-white px-6 flex items-center justify-between shadow-md z-40 sticky top-0">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-[#4C70A6] flex items-center justify-center text-white shadow-2xs">
             <Shield className="w-5 h-5" />
           </div>
 
           <div>
             <div className="font-bold text-sm text-white tracking-tight leading-none">
-              CS 401 — Distributed Systems
+              {session?.examTitle || "Examination Session"}
             </div>
             <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-              Secure Assessment Shell • {timingMode.replace("_", " ")}
+              Secure Assessment Shell • {session?.timingMode ? session.timingMode.replace("_", " ") : "STANDARD"}
             </div>
           </div>
         </div>
 
-        {/* Header Right: Connection & Respective Timer */}
-        <div className="flex items-center gap-6">
-          {/* Timing Mode Quick Switcher for Testing */}
-          <div className="hidden md:flex items-center gap-1 bg-slate-800 p-1 rounded border border-slate-700 text-[10px] font-mono">
-            {(["WHOLE_PAPER", "SECTION_TIMED", "QUESTION_TIMED"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setTimingMode(m)}
-                className={`px-2 py-0.5 rounded cursor-pointer ${
-                  timingMode === m ? "bg-[#4C70A6] text-white font-bold" : "text-slate-400 hover:text-white"
-                }`}
-              >
-                {m === "WHOLE_PAPER" ? "Paper" : m === "SECTION_TIMED" ? "Section" : "Question"}
-              </button>
-            ))}
+        {/* Header Right: Connection & Authoritative Countdown */}
+        <div className="flex items-center gap-5">
+          <div className="flex items-center gap-1.5 text-xs font-mono">
+            {isOnline ? (
+              <span className="text-emerald-400 flex items-center gap-1">
+                <Wifi className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Connected</span>
+              </span>
+            ) : (
+              <span className="text-amber-400 flex items-center gap-1">
+                <WifiOff className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Offline</span>
+              </span>
+            )}
           </div>
 
-          <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-mono">
-            <Wifi className="w-3.5 h-3.5" />
-            <span>Connected</span>
-          </div>
+          {/* Question / Section Timer if active */}
+          {questionSecondsRemaining !== null && (
+            <div className="bg-amber-950/80 border border-amber-800 text-amber-300 px-3 py-1 rounded text-xs font-mono font-bold flex items-center gap-1.5 shadow-inner">
+              <Clock className="w-3.5 h-3.5" />
+              <span>Q-Timer: {questionSecondsRemaining}s</span>
+            </div>
+          )}
 
+          {/* Paper Deadline Clock */}
           <div className="bg-slate-800 border border-slate-700 px-3.5 py-1.5 rounded-md flex items-center gap-2 text-sm font-mono font-bold text-[#38BDF8] shadow-inner">
-            <Clock className="w-4 h-4" />
-            <span>{formatTimerDisplay()}</span>
+            <Clock className="w-4 h-4 text-[#38BDF8]" />
+            <span>{formatSeconds(paperSecondsRemaining)}</span>
           </div>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            className="text-xs text-slate-300 border-slate-700 hover:bg-slate-800"
+            onClick={() => setIsFinalSubmitModalOpen(true)}
+          >
+            Finish Exam
+          </Button>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1 p-6 md:p-8 max-w-4xl w-full mx-auto flex flex-col gap-6 animate-fadeIn">
-        {/* Progress & Section Bar */}
+      {/* Main Examination Viewport */}
+      <main className="flex-1 p-6 md:p-8 max-w-4xl w-full mx-auto flex flex-col gap-5 animate-fadeIn">
+        {/* Error Banner */}
+        {errorMessage && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded-md text-xs text-red-800 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
+        {/* Section & Progress Bar */}
         <div className="bg-white border border-slate-200 rounded-md p-4 shadow-2xs flex items-center justify-between text-xs">
           <div className="font-bold text-slate-900 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-[#4C70A6]" />
-            <span>{currentQ?.section}</span>
+            <span className="w-2.5 h-2.5 rounded-full bg-[#4C70A6]" />
+            <span>{session?.sectionTitle || "General Section"}</span>
           </div>
-          <div className="font-mono text-slate-500 font-semibold">
-            Question {currentQuestionIdx + 1} of {questions.length}
+
+          <div className="flex items-center gap-3 font-mono">
+            {currentQ?.marks && (
+              <span className="bg-slate-100 px-2 py-0.5 rounded text-slate-600 font-bold text-[11px]">
+                {currentQ.marks} {currentQ.marks === 1 ? "Mark" : "Marks"}
+              </span>
+            )}
+            <span className="text-slate-500 font-semibold text-xs">
+              Question {(session?.currentQuestionIndex ?? 0) + 1} of {session?.totalQuestions || 1}
+            </span>
           </div>
         </div>
 
-        {/* Question Card */}
-        {currentQ && (
+        {/* Active Question Card */}
+        {currentQ ? (
           <div className="bg-white border border-slate-200 rounded-md p-6 shadow-2xs flex flex-col gap-6">
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
-                <div className="flex items-center gap-2 mb-1.5">
-                  <Badge variant="info">{currentQ.type}</Badge>
+                <div className="flex items-center gap-2 mb-2">
+                  <Badge variant="info" className="text-[10px] font-mono uppercase">
+                    {currentQ.type.replace("_", " ")}
+                  </Badge>
+                  <span className="text-xs text-slate-400 font-mono">
+                    Question ID: {currentQ.id.slice(0, 8)}
+                  </span>
                 </div>
-                <h2 className="text-base font-bold text-slate-900 leading-relaxed">
+                <h2 className="text-base font-bold text-slate-900 leading-relaxed whitespace-pre-wrap">
                   {currentQ.prompt}
                 </h2>
               </div>
             </div>
 
-            {/* MCQ / MSQ Options */}
-            {currentQ.options && (
+            {/* Answer Input Controls */}
+            {/* 1. Single-choice MCQ & True/False */}
+            {(currentQ.type === "MCQ" || currentQ.type === "TRUE_FALSE") && currentQ.options && (
               <div className="flex flex-col gap-3">
                 {currentQ.options.map((opt, idx) => {
-                  const isSelected = answers[currentQ.id] === opt.id;
+                  const isSelected = selectedAnswer === opt.text || selectedAnswer === opt.id;
                   return (
                     <label
-                      key={opt.id}
-                      onClick={() => handleSelectOption(currentQ.id, opt.id)}
+                      key={opt.id || idx}
+                      onClick={() => setSelectedAnswer(opt.text)}
                       className={`w-full p-4 rounded-md border text-left flex items-center gap-3 transition-colors cursor-pointer text-xs ${
                         isSelected
                           ? "border-[#4C70A6] bg-[#4C70A6]/5 font-semibold text-slate-900 ring-1 ring-[#4C70A6]"
-                          : "border-slate-200 hover:border-slate-300 text-slate-800"
+                          : "border-slate-200 hover:border-slate-300 text-slate-800 bg-white"
                       }`}
                     >
                       <input
                         type="radio"
+                        name="mcq_option"
                         checked={isSelected}
                         onChange={() => {}}
                         className="w-4 h-4 text-[#4C70A6] focus:ring-[#4C70A6]"
@@ -212,43 +630,173 @@ export const LiveExamSessionScreen: React.FC = () => {
                       <span className="font-mono font-bold text-slate-400">
                         {String.fromCharCode(65 + idx)}.
                       </span>
-                      <span>{opt.text}</span>
+                      <span className="leading-relaxed">{opt.text}</span>
                     </label>
                   );
                 })}
               </div>
             )}
 
-            {/* Subjective Text Area */}
-            {!currentQ.options && (
-              <textarea
-                rows={6}
-                value={answers[currentQ.id] || ""}
-                onChange={(e) => handleSelectOption(currentQ.id, e.target.value)}
-                placeholder="Type your response here..."
-                className="w-full text-xs p-3.5 border border-slate-300 rounded-md focus:ring-2 focus:ring-[#4C70A6]/30 focus:border-[#4C70A6] outline-none font-sans"
-              />
+            {/* 2. Multiple-choice MSQ */}
+            {currentQ.type === "MSQ" && currentQ.options && (
+              <div className="flex flex-col gap-3">
+                <div className="text-[11px] text-slate-500 font-semibold mb-1">
+                  Select all correct options:
+                </div>
+                {currentQ.options.map((opt, idx) => {
+                  const selectedArr = Array.isArray(selectedAnswer) ? selectedAnswer : [];
+                  const isChecked = selectedArr.includes(opt.text);
+                  const toggleOption = () => {
+                    if (isChecked) {
+                      setSelectedAnswer(selectedArr.filter((item: string) => item !== opt.text));
+                    } else {
+                      setSelectedAnswer([...selectedArr, opt.text]);
+                    }
+                  };
+
+                  return (
+                    <label
+                      key={opt.id || idx}
+                      onClick={toggleOption}
+                      className={`w-full p-4 rounded-md border text-left flex items-center gap-3 transition-colors cursor-pointer text-xs ${
+                        isChecked
+                          ? "border-[#4C70A6] bg-[#4C70A6]/5 font-semibold text-slate-900 ring-1 ring-[#4C70A6]"
+                          : "border-slate-200 hover:border-slate-300 text-slate-800 bg-white"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => {}}
+                        className="w-4 h-4 text-[#4C70A6] rounded focus:ring-[#4C70A6]"
+                      />
+                      <span className="font-mono font-bold text-slate-400">
+                        {String.fromCharCode(65 + idx)}.
+                      </span>
+                      <span className="leading-relaxed">{opt.text}</span>
+                    </label>
+                  );
+                })}
+              </div>
             )}
 
-            {/* Clean Action Navigation */}
-            <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-              <span className="text-xs text-slate-400 font-mono">
-                {answers[currentQ.id] ? "Answer recorded" : "Select an answer to proceed"}
-              </span>
+            {/* 3. Subjective SHORT / LONG Text Answer */}
+            {(currentQ.type === "SHORT" || currentQ.type === "LONG" || !currentQ.options) && (
+              <div className="flex flex-col gap-2">
+                <textarea
+                  rows={currentQ.type === "LONG" ? 10 : 5}
+                  value={typeof selectedAnswer === "string" ? selectedAnswer : ""}
+                  onChange={(e) => setSelectedAnswer(e.target.value)}
+                  placeholder="Type your response here..."
+                  className="w-full text-xs p-4 border border-slate-300 rounded-md focus:ring-2 focus:ring-[#4C70A6]/30 focus:border-[#4C70A6] outline-none font-sans leading-relaxed"
+                />
+                <div className="text-[11px] text-slate-400 font-mono text-right">
+                  {(typeof selectedAnswer === "string" ? selectedAnswer.length : 0)} characters
+                </div>
+              </div>
+            )}
 
-              <Button
-                variant="primary"
-                size="md"
-                className="bg-[#4C70A6] hover:bg-[#3F5E8E] text-white font-semibold"
-                onClick={handleNextQuestion}
-                icon={<ChevronRight className="w-4 h-4" />}
+            {/* Action Bar (Forward-Only Invariant) */}
+            <div className="pt-5 border-t border-slate-100 flex items-center justify-between">
+              <button
+                onClick={handleSkipCurrentQuestion}
+                disabled={isSubmittingAction}
+                className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 font-medium cursor-pointer disabled:opacity-50"
               >
-                {currentQuestionIdx < questions.length - 1 ? "Next Question" : "Submit Examination"}
-              </Button>
+                <SkipForward className="w-3.5 h-3.5" />
+                <span>Skip Question</span>
+              </button>
+
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="primary"
+                  size="md"
+                  disabled={isSubmittingAction}
+                  className="bg-[#4C70A6] hover:bg-[#3F5E8E] text-white font-semibold flex items-center gap-2"
+                  onClick={isLastQuestion ? () => setIsFinalSubmitModalOpen(true) : handleSubmitCurrentQuestion}
+                >
+                  {isSubmittingAction ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Recording Answer...</span>
+                    </>
+                  ) : isLastQuestion ? (
+                    <>
+                      <span>Review & Submit Exam</span>
+                      <CheckCircle2 className="w-4 h-4" />
+                    </>
+                  ) : (
+                    <>
+                      <span>Next Question</span>
+                      <ChevronRight className="w-4 h-4" />
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
+          </div>
+        ) : (
+          <div className="bg-white border border-slate-200 rounded-md p-10 text-center flex flex-col items-center gap-4">
+            <CheckCircle2 className="w-10 h-10 text-emerald-600" />
+            <h3 className="text-base font-bold text-slate-900">All Questions Completed</h3>
+            <p className="text-xs text-slate-500 max-w-sm">
+              You have reached the end of the examination. Click below to submit your attempt.
+            </p>
+            <Button
+              variant="primary"
+              size="lg"
+              className="bg-[#4C70A6] hover:bg-[#3F5E8E] text-white"
+              onClick={handleFinalExamSubmit}
+            >
+              Submit Examination Now
+            </Button>
           </div>
         )}
       </main>
+
+      {/* Confirmation Modal for Final Submit */}
+      {isFinalSubmitModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 flex flex-col gap-4">
+            <div className="flex items-center gap-3 text-slate-900">
+              <div className="w-10 h-10 rounded-full bg-blue-100 text-[#4C70A6] flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold">Submit Final Examination?</h3>
+                <p className="text-xs text-slate-500">
+                  Once submitted, all responses will be saved and routed to the grading queue.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded p-3 text-xs font-mono text-slate-600">
+              <div>Exam: {session?.examTitle}</div>
+              <div>Current Question: {(session?.currentQuestionIndex ?? 0) + 1} / {session?.totalQuestions}</div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setIsFinalSubmitModalOpen(false)}
+                disabled={isSubmittingAction}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                className="bg-[#4C70A6] hover:bg-[#3F5E8E] text-white"
+                onClick={handleFinalExamSubmit}
+                disabled={isSubmittingAction}
+              >
+                {isSubmittingAction ? "Submitting..." : "Confirm & Submit"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

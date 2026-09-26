@@ -31,7 +31,7 @@ export const errorHandler = (
     return res.status(500).json({
         error: {
             code: 'INTERNAL_SERVER_ERROR',
-            message: 'An unexpected error occurred.',
+            message: err.message || 'An unexpected error occurred.',
         },
     });
 };

@@ -10,18 +10,22 @@ import {
     Activity,
     FileCheck,
 } from "lucide-react";
+import { useGetTeacherExamsQuery } from "@/redux/services/examBuilderApi";
 
 export const TeacherDashboardScreen: React.FC = () => {
     const { user } = useAppSelector((state) => state.auth);
     const navigate = useNavigate();
 
-    const teacherName = user?.fullName || "Sarah";
+    const { data: examsData } = useGetTeacherExamsQuery();
+    const exams = (examsData as any)?.data || examsData || [];
+
+    const teacherName = user?.fullName || "Teacher";
 
     const stats = [
-        { label: "Exams Created", value: 12 },
-        { label: "Draft", value: 3 },
-        { label: "Published", value: 7 },
-        { label: "Closed", value: 2 },
+        { label: "Exams Created", value: exams.length },
+        { label: "Draft", value: exams.filter((e: any) => e.status === 'DRAFT').length },
+        { label: "Published", value: exams.filter((e: any) => e.status === 'PUBLISHED').length },
+        { label: "Closed", value: exams.filter((e: any) => e.status === 'CLOSED').length },
     ];
 
     const quickActions = [

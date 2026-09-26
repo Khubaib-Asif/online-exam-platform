@@ -4,28 +4,51 @@ import { AppLayout } from "@components/layout/AppLayout";
 import { Badge } from "@components/ui/Badge";
 import { Button } from "@components/ui/Button";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@components/ui/Table";
-import { Award, ArrowLeft, ShieldCheck, CheckCircle2 } from "lucide-react";
+import { Award, ArrowLeft, ShieldCheck, CheckCircle2, RefreshCw, AlertCircle, Lock } from "lucide-react";
+import { useGetStudentResultDetailQuery } from "@redux/services/gradingApi";
 
 export const ResultDetailScreen: React.FC = () => {
   const { resultId } = useParams<{ resultId: string }>();
   const navigate = useNavigate();
 
-  const report = {
-    resultId: resultId || "res-801",
-    examTitle: "CS 401 — Distributed Systems & Architecture",
-    teacherName: "Dr. Sarah Jenkins",
-    publishedAt: "Aug 04, 2026",
-    totalAwarded: 87,
-    totalMax: 100,
-    percentage: "87.0%",
-    status: "PASSED",
-    items: [
-      { id: "q-101", title: "Paxos Quorum Size", awarded: 4, max: 4, type: "MCQ" },
-      { id: "q-102", title: "Linearizability Properties", awarded: 5, max: 5, type: "MSQ" },
-      { id: "q-104", title: "2PC Coordinator Crash", awarded: 7, max: 8, type: "SHORT_ANSWER" },
-    ],
-    teacherFeedback: "Excellent work overall. Strong understanding of distributed consensus and 2PC failure modes.",
-  };
+  const {
+    data: report,
+    isLoading,
+    isError,
+  } = useGetStudentResultDetailQuery(resultId || "", {
+    skip: !resultId,
+  });
+
+  if (isLoading) {
+    return (
+      <AppLayout pageTitle="Result Detail">
+        <div className="max-w-3xl mx-auto bg-white border border-slate-200 rounded-md p-12 text-center flex flex-col items-center gap-3 shadow-2xs">
+          <RefreshCw className="w-8 h-8 text-[#4C70A6] animate-spin" />
+          <p className="text-xs font-medium text-slate-600">Loading published result report...</p>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (isError || !report) {
+    return (
+      <AppLayout pageTitle="Result Detail">
+        <div className="max-w-3xl mx-auto flex flex-col gap-4">
+          <button
+            onClick={() => navigate("/results")}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Back to Results</span>
+          </button>
+          <div className="bg-rose-50 border border-rose-200 rounded-md p-6 text-center text-xs text-rose-800 flex items-center justify-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600" />
+            <span>Published result report not found or access restricted.</span>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout pageTitle={`Result Detail — ${report.resultId}`}>
@@ -45,10 +68,12 @@ export const ResultDetailScreen: React.FC = () => {
             <div>
               <div className="flex items-center gap-2 mb-1">
                 <Badge variant="success">Immutable Published Result</Badge>
-                <span className="font-mono text-xs text-slate-400">ID: {report.resultId}</span>
+                <span className="font-mono text-xs text-slate-400">ID: {report.resultId.slice(0, 12)}...</span>
               </div>
               <h1 className="text-xl font-bold text-slate-900">{report.examTitle}</h1>
-              <p className="text-xs text-slate-500 mt-1">Instructor: {report.teacherName} • Published {report.publishedAt}</p>
+              <p className="text-xs text-slate-500 mt-1">
+                Instructor: {report.teacherName} • Published {new Date(report.publishedAt).toLocaleDateString()}
+              </p>
             </div>
             <Badge variant="success" className="text-base py-1.5 px-4 font-mono font-bold">
               {report.percentage} ({report.status})
@@ -67,8 +92,19 @@ export const ResultDetailScreen: React.FC = () => {
             </div>
             <div>
               <div className="text-xs text-slate-500">Final Outcome</div>
-              <div className="text-2xl font-bold text-emerald-600 mt-1">{report.status}</div>
+              <div className={`text-2xl font-bold mt-1 ${report.status === "PASSED" ? "text-emerald-600" : "text-rose-600"}`}>
+                {report.status}
+              </div>
             </div>
+          </div>
+
+          {/* Cryptographic Snapshot Verification Hash */}
+          <div className="bg-slate-50 border border-slate-200 rounded-md p-3 text-[11px] font-mono text-slate-500 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>Cryptographic Integrity Hash:</span>
+            </div>
+            <span className="text-slate-800 font-bold truncate max-w-xs">{report.resultHash}</span>
           </div>
 
           {/* Question Level Breakdown */}
@@ -79,18 +115,18 @@ export const ResultDetailScreen: React.FC = () => {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Question ID & Concept</TableHead>
+                  <TableHead>Question Concept</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Score</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {report.items.map((item) => (
+                {report.items.map((item, idx) => (
                   <TableRow key={item.id}>
                     <TableCell>
                       <div>
                         <div className="font-semibold text-xs text-slate-900">{item.title}</div>
-                        <div className="text-[11px] text-slate-400 font-mono">{item.id}</div>
+                        <div className="text-[11px] text-slate-400 font-mono">Q{idx + 1}</div>
                       </div>
                     </TableCell>
                     <TableCell><Badge variant="outline">{item.type}</Badge></TableCell>
@@ -115,3 +151,4 @@ export const ResultDetailScreen: React.FC = () => {
     </AppLayout>
   );
 };
+

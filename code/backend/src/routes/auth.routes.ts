@@ -14,11 +14,12 @@ router.post('/auth/forgot-password', sensitiveActionLimiter, AuthController.forg
 router.post('/auth/reset-password', sensitiveActionLimiter, AuthController.resetPassword);
 router.post('/auth/request-verification', sensitiveActionLimiter, AuthController.requestEmailVerification);
 router.post('/auth/verify-email', sensitiveActionLimiter, AuthController.verifyEmail);
+router.post('/auth/refresh-token', authRateLimiter, AuthController.refreshToken);
 
-// Protected Routes
+// Protected / Auth Session Routes
 router.get('/auth/me', generalApiLimiter, authenticate, AuthController.getMe);
+router.post('/auth/logout', generalApiLimiter, AuthController.logout);
 router.post('/auth/profile-photo', generalApiLimiter, authenticate, AuthController.uploadProfilePhoto);
-router.post('/auth/verify-email-direct', generalApiLimiter, authenticate, AuthController.verifyEmailDirect);
 
 // Owner-Only Routes
 router.post(

@@ -1,26 +1,27 @@
 import { createApi } from '@reduxjs/toolkit/query/react';
 
-// Types
-export interface Device {
+export interface DeviceItem {
     id: string;
-    userId: string;
-    label: string;
-    os: string;
-    deviceType: string;
+    name: string;
+    os?: string;
+    platform?: string;
+    appVersion?: string;
     isActive: boolean;
-    lastUsedAt: string;
-    createdAt: string;
-    updatedAt: string;
+    isCurrent?: boolean;
+    lastSeen?: string;
+    registeredAt?: string;
+    revokedAt?: string;
 }
 
 export interface RegisterDeviceRequest {
     label?: string;
     platform?: string;
     appVersion?: string;
+    fingerprintHash?: string;
 }
 
 export interface RegisterDeviceResponse {
-    device: Device;
+    device: DeviceItem;
     message: string;
     activeDeviceCount: number;
     maxDevices: number;
@@ -32,9 +33,11 @@ export interface RevokeDeviceResponse {
 }
 
 export interface DeviceListResponse {
-    devices: Device[];
+    devices: DeviceItem[];
+    activeDevices?: DeviceItem[];
+    revokedDevices?: DeviceItem[];
     activeCount: number;
-    maxDevices: number;
+    maxAllowed?: number;
 }
 
 // ============================================
@@ -47,12 +50,9 @@ let baseQueryInstance: any = null;
 // Function to get or create base query
 const getBaseQuery = async () => {
     if (!baseQueryInstance) {
-        console.log('Loading axiosBaseQuery...');
         // Dynamic import to avoid circular dependency
         const { axiosBaseQuery } = await import('@/lib/axiosBaseQuery');
-        console.log('axiosBaseQuery loaded successfully');
         baseQueryInstance = axiosBaseQuery({ baseUrl: '/v1/devices' });
-        console.log('Base query initialized');
     }
     return baseQueryInstance;
 };
@@ -93,6 +93,16 @@ export const deviceApi = createApi({
             }),
             invalidatesTags: ['Device'],
         }),
+
+        // Revoke all other devices (Telegram style)
+        revokeOtherDevices: builder.mutation<{ revokedCount: number; success: boolean }, { currentDeviceId?: string } | void>({
+            query: (body) => ({
+                url: '/revoke-others',
+                method: 'POST',
+                data: body || {},
+            }),
+            invalidatesTags: ['Device'],
+        }),
     }),
 });
 
@@ -100,4 +110,5 @@ export const {
     useGetDevicesQuery,
     useRegisterDeviceMutation,
     useRevokeDeviceMutation,
+    useRevokeOtherDevicesMutation,
 } = deviceApi;

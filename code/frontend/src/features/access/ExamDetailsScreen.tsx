@@ -152,7 +152,7 @@ export const ExamDetailsScreen: React.FC = () => {
                     onClick={() => navigate(`/exam/${exam.id}/launch`)}
                     icon={<Play className="w-4 h-4" />}
                   >
-                    Open Desktop Launch Path
+                    Launch Examination
                   </Button>
                 </div>
               )}
