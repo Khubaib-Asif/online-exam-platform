@@ -26,11 +26,7 @@ export const SessionEntryScreen: React.FC = () => {
     skip: !ticket,
   });
 
-  useEffect(() => {
-    if (existingTicket) {
-      setTicket(existingTicket);
-    }
-  }, [existingTicket]);
+
 
   const handleGenerateTicket = async () => {
     if (!targetExamId) return;

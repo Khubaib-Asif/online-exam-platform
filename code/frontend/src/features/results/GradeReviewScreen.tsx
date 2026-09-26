@@ -38,27 +38,24 @@ export const GradeReviewScreen: React.FC = () => {
   const [confirmGradeMutation, { isLoading: isSaving }] = useConfirmGradeMutation();
 
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState<number>(0);
-  const [awardedMarks, setAwardedMarks] = useState<number>(0);
-  const [feedback, setFeedback] = useState<string>("");
+  const [marksOverrides, setMarksOverrides] = useState<Record<string, number>>({});
+  const [feedbackOverrides, setFeedbackOverrides] = useState<Record<string, string>>({});
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
   // Filter subjective questions or fallback to all questions
   const subjectiveQuestions = sessionData?.grades || [];
   const currentQ: QuestionGradeDetail | undefined = subjectiveQuestions[selectedQuestionIndex];
 
-  useEffect(() => {
-    if (currentQ) {
-      const initialScore =
-        currentQ.awardedMarks !== null
-          ? currentQ.awardedMarks
-          : currentQ.aiSuggestion?.suggestedMarks !== null && currentQ.aiSuggestion?.suggestedMarks !== undefined
-          ? currentQ.aiSuggestion.suggestedMarks
-          : currentQ.maxMarks;
-      setAwardedMarks(initialScore);
-      setFeedback("");
-      setSaveSuccessMsg(null);
-    }
-  }, [currentQ?.id, currentQ?.awardedMarks, currentQ?.aiSuggestion?.suggestedMarks]);
+  const defaultMarks = currentQ
+    ? currentQ.awardedMarks !== null
+      ? currentQ.awardedMarks
+      : currentQ.aiSuggestion?.suggestedMarks !== null && currentQ.aiSuggestion?.suggestedMarks !== undefined
+      ? currentQ.aiSuggestion.suggestedMarks
+      : currentQ.maxMarks
+    : 0;
+
+  const currentAwardedMarks = currentQ ? (marksOverrides[currentQ.id] ?? defaultMarks) : 0;
+  const currentFeedback = currentQ ? (feedbackOverrides[currentQ.id] ?? "") : "";
 
   const handleSaveMarks = async () => {
     if (!currentQ || !submissionId) return;
@@ -67,8 +64,8 @@ export const GradeReviewScreen: React.FC = () => {
       await confirmGradeMutation({
         sessionId: submissionId,
         gradeId: currentQ.id,
-        awardedMarks,
-        feedback,
+        awardedMarks: currentAwardedMarks,
+        feedback: currentFeedback,
       }).unwrap();
 
       setSaveSuccessMsg("Marks saved successfully!");
@@ -262,8 +259,11 @@ export const GradeReviewScreen: React.FC = () => {
                     type="number"
                     min={0}
                     max={currentQ.maxMarks}
-                    value={awardedMarks}
-                    onChange={(e) => setAwardedMarks(Number(e.target.value))}
+                    value={currentAwardedMarks}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setMarksOverrides((prev) => ({ ...prev, [currentQ.id]: val }));
+                    }}
                   />
 
                   <div>
@@ -272,8 +272,11 @@ export const GradeReviewScreen: React.FC = () => {
                     </label>
                     <textarea
                       rows={2}
-                      value={feedback}
-                      onChange={(e) => setFeedback(e.target.value)}
+                      value={currentFeedback}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setFeedbackOverrides((prev) => ({ ...prev, [currentQ.id]: val }));
+                      }}
                       placeholder="Optional feedback note for audit trail..."
                       className="w-full text-xs p-2.5 border border-slate-300 rounded-md focus:ring-2 focus:ring-[#4C70A6]/30 outline-none"
                     />

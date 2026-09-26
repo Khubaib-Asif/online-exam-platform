@@ -53,6 +53,11 @@ export const LiveExamSessionScreen: React.FC = () => {
   const [sectionSecondsRemaining, setSectionSecondsRemaining] = useState<number | null>(null);
   const [questionSecondsRemaining, setQuestionSecondsRemaining] = useState<number | null>(null);
 
+  const sessionRef = useRef<SessionProjection | null>(session);
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
   const isSubmittingAction = isSubmittingQuestion || isSkippingQuestion || isSubmittingExam;
 
   // Initialize Session on Mount
@@ -196,21 +201,22 @@ export const LiveExamSessionScreen: React.FC = () => {
       };
       telemetryQueueRef.current.push(event);
 
+      const currentSession = sessionRef.current;
       // Flush immediately on severe events
       if (
-        session?.sessionId &&
+        currentSession?.sessionId &&
         (eventType === "MULTIPLE_DISPLAYS" ||
           eventType === "FULLSCREEN_EXIT" ||
           eventType === "FORBIDDEN_KEYSTROKE")
       ) {
         sendTelemetry({
-          sessionId: session.sessionId,
-          clientSequence: session.clientSequence,
+          sessionId: currentSession.sessionId,
+          clientSequence: currentSession.clientSequence,
           events: [event],
         }).catch((e) => console.warn("Immediate telemetry flush warning:", e));
       }
     },
-    [session?.sessionId, session?.clientSequence, sendTelemetry]
+    [sendTelemetry]
   );
 
   // Periodic Telemetry Batch Flush (Every 5 seconds)
