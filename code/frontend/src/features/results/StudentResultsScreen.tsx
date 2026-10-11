@@ -73,10 +73,7 @@ export const StudentResultsScreen: React.FC = () => {
                 {results.map((res: StudentResultItem) => (
                   <TableRow key={res.resultId}>
                     <TableCell>
-                      <div>
-                        <div className="font-semibold text-slate-900">{res.examTitle}</div>
-                        <div className="text-xs text-slate-400 font-mono">ID: {res.examId}</div>
-                      </div>
+                      <div className="font-semibold text-slate-900">{res.examTitle}</div>
                     </TableCell>
                     <TableCell className="text-xs text-slate-700">{res.teacherName}</TableCell>
                     <TableCell className="font-mono text-xs font-bold text-slate-900">

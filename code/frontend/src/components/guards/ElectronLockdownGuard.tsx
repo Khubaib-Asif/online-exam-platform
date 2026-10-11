@@ -6,14 +6,7 @@ interface ElectronLockdownGuardProps {
   children: React.ReactNode;
 }
 
-/**
- * ElectronLockdownGuard enforces the strict platform boundary (HLD §5, §9, §13 & LLD §14):
- * Exam security gates (/exam/:id/gates) and live attempts (/exam/:id/live) MUST ONLY execute
- * within the signed Electron lockdown client.
- *
- * Direct attempts to access protected assessment routes in a standard web browser are blocked
- * and redirected to the desktop launcher landing screen (/exam/:id/launch).
- */
+
 export const ElectronLockdownGuard: React.FC<ElectronLockdownGuardProps> = ({ children }) => {
   const location = useLocation();
   const [searchParams] = useSearchParams();

@@ -77,13 +77,36 @@ export class AuthService {
 
     // 2. Issue Teacher Invitation (Owner Only)
     static async issueTeacherInvitation(issuedByUserId: string, email: string, expiresInSeconds: number = 86400) {
+        const normalizedEmail = email.toLowerCase().trim();
+
+        // 1. Check if user already exists
+        const existingUser = await prisma.user.findUnique({
+            where: { email: normalizedEmail },
+        });
+
+        if (existingUser) {
+            throw new AppError(400, `A user account with email "${normalizedEmail}" is already registered.`, 'USER_ALREADY_EXISTS');
+        }
+
+        // 2. Invalidate / supersede any older pending invitations for this email
+        await prisma.teacherInvitation.updateMany({
+            where: {
+                email: normalizedEmail,
+                status: 'ISSUED',
+            },
+            data: {
+                status: 'REVOKED',
+                revokedAt: new Date(),
+            },
+        });
+
         const rawToken = crypto.randomBytes(32).toString('hex');
         const tokenHash = sha256(rawToken);
         const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
 
         const invitation = await prisma.teacherInvitation.create({
             data: {
-                email: email.toLowerCase(),
+                email: normalizedEmail,
                 tokenHash,
                 issuedBy: issuedByUserId,
                 expiresAt,
@@ -98,6 +121,142 @@ export class AuthService {
             email: invitation.email,
             expiresAt: invitation.expiresAt,
             invitationToken: rawToken, // Displayed once to the owner
+        };
+    }
+
+    // 2b. List All Teacher Invitations (Owner Only)
+    static async listTeacherInvitations() {
+        const invitations = await prisma.teacherInvitation.findMany({
+            orderBy: { createdAt: 'desc' },
+            include: {
+                issuer: {
+                    select: { id: true, firstName: true, lastName: true, email: true },
+                },
+                redeemedUser: {
+                    select: { id: true, firstName: true, lastName: true, email: true },
+                },
+            },
+        });
+
+        const now = new Date();
+        return invitations.map((inv) => {
+            let effectiveStatus: 'ISSUED' | 'REDEEMED' | 'REVOKED' | 'EXPIRED' = inv.status as any;
+            if (inv.status === 'ISSUED' && inv.expiresAt < now) {
+                effectiveStatus = 'EXPIRED';
+            }
+            return {
+                id: inv.id,
+                email: inv.email,
+                role: inv.role,
+                status: effectiveStatus,
+                expiresAt: inv.expiresAt,
+                createdAt: inv.createdAt,
+                redeemedAt: inv.redeemedAt,
+                revokedAt: inv.revokedAt,
+                issuedBy: inv.issuer ? `${inv.issuer.firstName} ${inv.issuer.lastName}` : undefined,
+                redeemedBy: inv.redeemedUser ? `${inv.redeemedUser.firstName} ${inv.redeemedUser.lastName}` : undefined,
+            };
+        });
+    }
+
+    // 2c. Revoke Teacher Invitation (Owner Only)
+    static async revokeTeacherInvitation(invitationId: string) {
+        const invitation = await prisma.teacherInvitation.findUnique({
+            where: { id: invitationId },
+        });
+
+        if (!invitation) {
+            throw new AppError(404, 'Teacher invitation not found', 'INVITATION_NOT_FOUND');
+        }
+
+        if (invitation.status === 'REDEEMED') {
+            throw new AppError(400, 'Cannot revoke an already redeemed invitation', 'ALREADY_REDEEMED');
+        }
+
+        const updated = await prisma.teacherInvitation.update({
+            where: { id: invitationId },
+            data: {
+                status: 'REVOKED',
+                revokedAt: new Date(),
+            },
+        });
+
+        return { message: 'Teacher invitation revoked successfully', invitation: updated };
+    }
+
+    // 2d. Validate Teacher Invitation Token
+    static async validateTeacherInvitation(token: string) {
+        if (!token) {
+            return {
+                isValid: false,
+                email: '',
+                status: 'INVALID',
+                message: 'No invitation token provided.',
+            };
+        }
+
+        const tokenHash = sha256(token);
+        const invitation = await prisma.teacherInvitation.findUnique({
+            where: { tokenHash },
+        });
+
+        if (!invitation) {
+            return {
+                isValid: false,
+                email: '',
+                status: 'INVALID',
+                message: 'Invalid invitation link.',
+            };
+        }
+
+        // Check if an active user account already exists for this email
+        const user = await prisma.user.findUnique({
+            where: { email: invitation.email },
+        });
+
+        if (user) {
+            return {
+                isValid: false,
+                email: invitation.email,
+                status: 'ALREADY_REGISTERED',
+                message: `An account for ${invitation.email} is already active. You can sign in directly.`,
+            };
+        }
+
+        const now = new Date();
+        if (invitation.status === 'REVOKED') {
+            return {
+                isValid: false,
+                email: invitation.email,
+                status: 'REVOKED',
+                message: 'This invitation link is no longer active (a newer invitation may have been sent, or it was revoked).',
+            };
+        }
+
+        if (invitation.status === 'REDEEMED') {
+            return {
+                isValid: false,
+                email: invitation.email,
+                status: 'REDEEMED',
+                message: 'This invitation has already been redeemed.',
+            };
+        }
+
+        if (invitation.expiresAt < now) {
+            return {
+                isValid: false,
+                email: invitation.email,
+                status: 'EXPIRED',
+                message: 'This invitation link has expired. Please contact the administrator.',
+            };
+        }
+
+        return {
+            isValid: true,
+            email: invitation.email,
+            status: 'ISSUED',
+            expiresAt: invitation.expiresAt,
+            message: 'Valid invitation token.',
         };
     }
 
@@ -121,7 +280,7 @@ export class AuthService {
 
             const existingUser = await tx.user.findUnique({ where: { email: invitation.email } });
             if (existingUser) {
-                throw new AppError(409, 'Email address is already in use', 'EMAIL_IN_USE');
+                throw new AppError(409, 'An account with this email address already exists. Please sign in.', 'EMAIL_IN_USE');
             }
 
             const passwordHash = await hashPassword(data.password);
@@ -139,12 +298,26 @@ export class AuthService {
                 select: { id: true, email: true, firstName: true, lastName: true, role: true },
             });
 
+            // Mark current invitation as REDEEMED
             await tx.teacherInvitation.update({
                 where: { id: invitation.id },
                 data: {
                     status: 'REDEEMED',
                     redeemedAt: new Date(),
                     redeemedUserId: teacher.id,
+                },
+            });
+
+            // Automatically invalidate any remaining pending invitations for this email
+            await tx.teacherInvitation.updateMany({
+                where: {
+                    email: invitation.email,
+                    status: 'ISSUED',
+                    id: { not: invitation.id },
+                },
+                data: {
+                    status: 'REVOKED',
+                    revokedAt: new Date(),
                 },
             });
 
@@ -227,12 +400,15 @@ export class AuthService {
             },
         });
 
+        const fullName = `${user.firstName} ${user.lastName || ''}`.trim() || user.email;
+
         return {
             user: {
                 id: user.id,
                 email: user.email,
                 firstName: user.firstName,
                 lastName: user.lastName,
+                fullName,
                 role: user.role,
                 isEmailVerified: isVerified,
             },
@@ -395,6 +571,34 @@ export class AuthService {
         return { message: 'Password has been set successfully.' };
     }
 
+    // 8b. Authenticated Change Password
+    static async changePassword(userId: string, currentPassword: string, newPassword: string) {
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+        });
+
+        if (!user) {
+            throw new AppError(404, 'User not found', 'USER_NOT_FOUND');
+        }
+
+        const isValid = await comparePassword(currentPassword, user.passwordHash);
+        if (!isValid) {
+            throw new AppError(400, 'Current password is incorrect', 'INVALID_CURRENT_PASSWORD');
+        }
+
+        const passwordHash = await hashPassword(newPassword);
+
+        await prisma.user.update({
+            where: { id: userId },
+            data: {
+                passwordHash,
+                passwordChangedAt: new Date(),
+            },
+        });
+
+        return { message: 'Password has been updated successfully.' };
+    }
+
     // 9. Update Profile Photo & Facial Enrollment Metadata
     static async updateProfilePhoto(userId: string, photoBase64: string, mimeType: string = 'image/jpeg') {
         const cleanBase64 = photoBase64.replace(/^data:image\/\w+;base64,/, '');
@@ -522,6 +726,8 @@ export class AuthService {
 
         const { token: newAccessToken } = generateAccessToken(user.id, user.role, true);
 
+        const fullName = `${user.firstName} ${user.lastName || ''}`.trim() || user.email;
+
         return {
             message: 'Email address verified successfully.',
             user: {
@@ -529,6 +735,7 @@ export class AuthService {
                 email: user.email,
                 firstName: user.firstName,
                 lastName: user.lastName,
+                fullName,
                 role: user.role,
                 isEmailVerified: true,
             },

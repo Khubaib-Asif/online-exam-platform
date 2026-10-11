@@ -22,6 +22,7 @@ router.get('/student/registrations', requireVerifiedEmail, RegistrationControlle
 router.get('/teacher/registrations/requests', requireRole('TEACHER'), RegistrationController.getTeacherPendingRequests);
 router.post('/teacher/registrations/:id/decide', requireRole('TEACHER'), RegistrationController.decideRegistrationRequest);
 router.post('/teacher/exams/:id/invitations', requireRole('TEACHER'), RegistrationController.createExamInvitation);
+router.delete('/teacher/exams/:id/invitations/:invitationId', requireRole('TEACHER'), RegistrationController.revokeExamInvitation);
 router.get('/teacher/exams/:id/distribution', requireRole('TEACHER'), RegistrationController.getExamDistributionStatus);
 
 export default router;

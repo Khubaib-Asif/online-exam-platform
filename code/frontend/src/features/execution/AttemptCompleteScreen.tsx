@@ -83,7 +83,7 @@ export const AttemptCompleteScreen: React.FC = () => {
               <div>
                 <span className="font-semibold text-slate-900">Responses Durably Saved:</span>
                 <span className="text-slate-500 ml-1">
-                  All submitted questions are synced with the server.
+                  All submitted questions are recorded.
                 </span>
               </div>
             </div>
@@ -92,7 +92,7 @@ export const AttemptCompleteScreen: React.FC = () => {
               <div>
                 <span className="font-semibold text-slate-900">Score Release:</span>
                 <span className="text-slate-500 ml-1">
-                  Automated grading for objective items and instructor evaluation for subjective questions will follow.
+                  Instructor evaluation for questions will follow.
                 </span>
               </div>
             </div>

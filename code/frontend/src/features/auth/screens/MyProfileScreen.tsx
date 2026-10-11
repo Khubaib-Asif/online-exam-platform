@@ -1,18 +1,28 @@
-import React from "react";
+import React, { useState } from "react";
 import { AppLayout } from "@components/layout/AppLayout";
 import { logout } from "@redux/slices/authSlice";
 import { useAppSelector, useAppDispatch } from "@/redux/hooks";
 import { Badge } from "@components/ui/Badge";
 import { Button } from "@components/ui/Button";
-import { CheckCircle2, LogOut, Mail, User, Smartphone, Key } from "lucide-react";
+import { Input } from "@components/ui/Input";
+import { Modal } from "@components/ui/Modal";
+import { CheckCircle2, LogOut, Mail, User, Smartphone, Key, AlertCircle, Check } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useLogoutMutation } from "@/redux/services/authApi";
+import { useLogoutMutation, useChangePasswordMutation } from "@/redux/services/authApi";
 
 export const MyProfileScreen: React.FC = () => {
     const { user } = useAppSelector((state) => state.auth);
     const dispatch = useAppDispatch();
     const navigate = useNavigate();
     const [logoutMutation] = useLogoutMutation();
+    const [changePasswordMutation, { isLoading: isChangingPassword }] = useChangePasswordMutation();
+
+    const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+    const [currentPassword, setCurrentPassword] = useState("");
+    const [newPassword, setNewPassword] = useState("");
+    const [confirmPassword, setConfirmPassword] = useState("");
+    const [formError, setFormError] = useState<string | null>(null);
+    const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
     const handleSignOut = async () => {
         try {
@@ -22,6 +32,58 @@ export const MyProfileScreen: React.FC = () => {
         } finally {
             dispatch(logout());
             navigate("/login", { replace: true });
+        }
+    };
+
+    const handleOpenPasswordModal = () => {
+        setCurrentPassword("");
+        setNewPassword("");
+        setConfirmPassword("");
+        setFormError(null);
+        setSuccessMessage(null);
+        setIsPasswordModalOpen(true);
+    };
+
+    const handleClosePasswordModal = () => {
+        setIsPasswordModalOpen(false);
+        setFormError(null);
+        setSuccessMessage(null);
+    };
+
+    const handleChangePasswordSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setFormError(null);
+        setSuccessMessage(null);
+
+        if (!currentPassword) {
+            setFormError("Current password is required.");
+            return;
+        }
+        if (!newPassword || newPassword.length < 8) {
+            setFormError("New password must be at least 8 characters long.");
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            setFormError("New passwords do not match.");
+            return;
+        }
+
+        try {
+            const res = await changePasswordMutation({
+                currentPassword,
+                newPassword,
+            }).unwrap();
+
+            setSuccessMessage(res.message || "Password changed successfully.");
+            setCurrentPassword("");
+            setNewPassword("");
+            setConfirmPassword("");
+            setTimeout(() => {
+                handleClosePasswordModal();
+            }, 1500);
+        } catch (err: any) {
+            const msg = err?.data?.message || err?.data?.error?.message || "Failed to change password. Please verify your current password.";
+            setFormError(msg);
         }
     };
 
@@ -130,19 +192,96 @@ export const MyProfileScreen: React.FC = () => {
                             </div>
                             <div>
                                 <div className="text-xs font-bold text-slate-900">Account Password</div>
-                                <div className="text-[11px] text-slate-500">Change or reset your password.</div>
+                                <div className="text-[11px] text-slate-500">Update your account password securely.</div>
                             </div>
                         </div>
                         <Button
                             variant="secondary"
                             size="sm"
-                            onClick={() => navigate("/forgot-password")}
+                            onClick={handleOpenPasswordModal}
                         >
-                            Reset Password
+                            Change Password
                         </Button>
                     </div>
                 </div>
             </div>
+
+            {/* Change Password Modal */}
+            <Modal
+                isOpen={isPasswordModalOpen}
+                onClose={handleClosePasswordModal}
+                title="Change Password"
+                subtitle="Enter your current password and choose a new secure password."
+            >
+                <form onSubmit={handleChangePasswordSubmit} className="p-6 flex flex-col gap-4">
+                    {formError && (
+                        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-md flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 shrink-0" />
+                            <span>{formError}</span>
+                        </div>
+                    )}
+
+                    {successMessage && (
+                        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-md flex items-center gap-2">
+                            <Check className="w-4 h-4 shrink-0" />
+                            <span>{successMessage}</span>
+                        </div>
+                    )}
+
+                    <Input
+                        label="Current Password"
+                        type="password"
+                        showPasswordToggle
+                        placeholder="Enter your current password"
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        disabled={isChangingPassword || !!successMessage}
+                        required
+                    />
+
+                    <Input
+                        label="New Password"
+                        type="password"
+                        showPasswordToggle
+                        placeholder="Minimum 8 characters"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        disabled={isChangingPassword || !!successMessage}
+                        required
+                    />
+
+                    <Input
+                        label="Confirm New Password"
+                        type="password"
+                        showPasswordToggle
+                        placeholder="Re-enter your new password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        disabled={isChangingPassword || !!successMessage}
+                        required
+                    />
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 mt-2">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={handleClosePasswordModal}
+                            disabled={isChangingPassword}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="submit"
+                            size="sm"
+                            loading={isChangingPassword}
+                            disabled={isChangingPassword || !!successMessage}
+                        >
+                            Update Password
+                        </Button>
+                    </div>
+                </form>
+            </Modal>
         </AppLayout>
     );
 };

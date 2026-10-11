@@ -132,7 +132,7 @@ export const IntegrityReviewScreen: React.FC = () => {
                 Auditable Review Decision Saved: {decision}
               </h3>
               <p className="text-xs text-slate-500">
-                An immutable audit event has been recorded with your reviewer ID and timestamp.
+                An immutable audit event has been recorded .
               </p>
               <Button
                 variant="secondary"

@@ -29,6 +29,11 @@ export interface TeacherPendingRequest {
   examTitle: string;
   requestedAt: string;
   status: "REQUESTED" | "PENDING" | "APPROVED" | "REJECTED";
+  registrationOpensAt?: string | null;
+  registrationClosesAt?: string | null;
+  startsAt?: string | null;
+  closesAt?: string | null;
+  isRegistrationOpen?: boolean;
 }
 
 export const TeacherRegistrationRequestsScreen: React.FC = () => {
@@ -46,6 +51,11 @@ export const TeacherRegistrationRequestsScreen: React.FC = () => {
     examTitle: r.examTitle,
     requestedAt: new Date(r.requestedAt).toLocaleString(),
     status: r.status as any,
+    registrationOpensAt: r.registrationOpensAt,
+    registrationClosesAt: r.registrationClosesAt,
+    startsAt: r.startsAt,
+    closesAt: r.closesAt,
+    isRegistrationOpen: r.isRegistrationOpen,
   }));
 
   const handleDecision = async (id: string, decision: "APPROVED" | "REJECTED") => {
@@ -145,6 +155,11 @@ export const TeacherRegistrationRequestsScreen: React.FC = () => {
               ) : (
                 filteredRequests.map((req) => {
                   const isPending = req.status === "REQUESTED" || req.status === "PENDING";
+                  const nowMs = Date.now();
+                  const regCloseMs = req.registrationClosesAt ? new Date(req.registrationClosesAt).getTime() : 0;
+                  const startsAtMs = req.startsAt ? new Date(req.startsAt).getTime() : 0;
+                  const isClosed = (req.isRegistrationOpen === false) || (regCloseMs > 0 && nowMs > regCloseMs) || (startsAtMs > 0 && nowMs > startsAtMs);
+
                   return (
                     <TableRow key={req.id}>
                       <TableCell>
@@ -154,10 +169,12 @@ export const TeacherRegistrationRequestsScreen: React.FC = () => {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <div>
-                          <div className="font-medium text-slate-800">{req.examTitle}</div>
-                          <div className="text-xs text-slate-400 font-mono">{req.examId}</div>
-                        </div>
+                        <div className="font-medium text-slate-800">{req.examTitle}</div>
+                        {isClosed && isPending && (
+                          <span className="text-[10px] font-mono text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded inline-block mt-0.5">
+                            Registration Closed
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="font-mono text-xs text-slate-600">
                         {req.requestedAt}
@@ -168,11 +185,13 @@ export const TeacherRegistrationRequestsScreen: React.FC = () => {
                             req.status === "APPROVED"
                               ? "success"
                               : isPending
-                              ? "warning"
+                              ? isClosed
+                                ? "warning"
+                                : "warning"
                               : "error"
                           }
                         >
-                          {req.status}
+                          {isPending && isClosed ? "EXPIRED" : req.status}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
@@ -181,20 +200,26 @@ export const TeacherRegistrationRequestsScreen: React.FC = () => {
                             <Button
                               variant="secondary"
                               size="sm"
-                              className="text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-                              onClick={() => handleDecision(req.id, "APPROVED")}
-                              icon={<CheckCircle className="w-3.5 h-3.5" />}
-                            >
-                              Approve
-                            </Button>
-                            <Button
-                              variant="secondary"
-                              size="sm"
                               className="text-red-700 border-red-200 hover:bg-red-50"
                               onClick={() => handleDecision(req.id, "REJECTED")}
                               icon={<XCircle className="w-3.5 h-3.5" />}
                             >
-                              Reject
+                              {isClosed ? "Dismiss" : "Reject"}
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className={
+                                isClosed
+                                  ? "text-slate-400 border-slate-200 bg-slate-50 cursor-not-allowed"
+                                  : "text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                              }
+                              disabled={isClosed}
+                              title={isClosed ? "Registration deadline has elapsed." : "Approve Student Registration"}
+                              onClick={() => !isClosed && handleDecision(req.id, "APPROVED")}
+                              icon={<CheckCircle className="w-3.5 h-3.5" />}
+                            >
+                              Approve
                             </Button>
                             <Button
                               variant="ghost"

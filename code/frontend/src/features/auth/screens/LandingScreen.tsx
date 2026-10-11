@@ -18,7 +18,7 @@ export const LandingScreen: React.FC = () => {
                     Exam Platform
                 </h1>
                 <p className="text-xs text-slate-500 mt-2 max-w-xs leading-relaxed font-normal">
-                    Use your institutional account to access examinations, question banks, grading, and integrity controls.
+                    Use your institutional account to access examinations, question banks, grading, and results.
                 </p>
 
                 {/* Action Buttons */}
@@ -46,7 +46,7 @@ export const LandingScreen: React.FC = () => {
 
                 {/* Footer info */}
                 <div className="mt-12 text-[11px] text-slate-400 font-mono">
-                    Secure Examination System • Server-Authoritative Engine v2.0
+                    Secure Examination System •  v1.0
                 </div>
             </div>
         </div>

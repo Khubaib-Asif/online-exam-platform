@@ -86,7 +86,7 @@ export const ResultPublicationScreen: React.FC = () => {
                   Results Published to {publishedData.publishedCount} Students!
                 </h3>
                 <p className="text-xs text-emerald-700 mt-1">
-                  Immutable SHA-256 result snapshots are now active and visible on student dashboards.
+                  Result snapshots are now active and visible on student dashboards.
                 </p>
               </div>
               <div className="pt-2 flex gap-3">
@@ -129,7 +129,7 @@ export const ResultPublicationScreen: React.FC = () => {
                 <div>
                   <span className="font-semibold">Publication Authority:</span>
                   <p className="mt-0.5 text-amber-800">
-                    Publishing makes grades and permitted feedback visible to registered students. This action generates cryptographic result hashes and appends immutable audit events.
+                    Publishing makes grades and permitted feedback visible to registered students. This action generates result hashes and appends into audit events.
                   </p>
                 </div>
               </div>

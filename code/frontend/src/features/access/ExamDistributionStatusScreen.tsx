@@ -18,38 +18,50 @@ import { useGetExamDistributionStatusQuery } from "@/redux/services/registration
 export const ExamDistributionStatusScreen: React.FC = () => {
   const { examId } = useParams<{ examId: string }>();
   const navigate = useNavigate();
-  const targetId = examId || "ex-401";
+  const targetId = examId || "";
 
-  const { data: apiDistribution, isLoading } = useGetExamDistributionStatusQuery(targetId, { skip: !examId });
+  const { data: apiDistribution, isLoading, isError } = useGetExamDistributionStatusQuery(targetId, { skip: !examId });
 
-  const distribution = apiDistribution
-    ? {
-        examId: apiDistribution.examId,
-        examTitle: apiDistribution.title,
-        policy: apiDistribution.accessPolicy as any,
-        totalRegistered: apiDistribution.approvedCount,
-        pendingRequests: apiDistribution.pendingCount,
-        rejectedRequests: apiDistribution.rejectedCount,
-        invitationsIssued: apiDistribution.invitationsCount,
-        invitationsRedeemed: apiDistribution.invitations?.reduce((sum: number, i: any) => sum + i.usedCount, 0) || 0,
-        registrationWindowOpen: apiDistribution.isRegistrationOpen,
-        registrationWindowEnd: new Date(apiDistribution.registrationClosesAt).toLocaleString(),
-      }
-    : {
-        examId: targetId,
-        examTitle: "CS 401 — Distributed Systems & Architecture",
-        policy: "APPROVAL_REQUIRED" as const,
-        totalRegistered: 28,
-        pendingRequests: 2,
-        rejectedRequests: 1,
-        invitationsIssued: 15,
-        invitationsRedeemed: 12,
-        registrationWindowOpen: true,
-        registrationWindowEnd: "Aug 09, 2026 • 11:59 PM",
-      };
+  if (isLoading) {
+    return (
+      <AppLayout pageTitle="Loading Distribution Status...">
+        <div className="max-w-3xl mx-auto p-12 text-center text-slate-500 text-sm">
+          Loading distribution status...
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (isError || !apiDistribution) {
+    return (
+      <AppLayout pageTitle="Exam Distribution">
+        <div className="max-w-3xl mx-auto p-12 bg-white border border-slate-200 rounded-md text-center">
+          <p className="text-sm text-slate-600 mb-3">No distribution data available for this examination.</p>
+          <Button variant="secondary" size="sm" onClick={() => navigate("/exams")}>
+            Return to Exam List
+          </Button>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  const distribution = {
+    examId: apiDistribution.examId,
+    examTitle: apiDistribution.title,
+    policy: apiDistribution.accessPolicy as any,
+    totalRegistered: apiDistribution.approvedCount,
+    pendingRequests: apiDistribution.pendingCount,
+    rejectedRequests: apiDistribution.rejectedCount,
+    invitationsIssued: apiDistribution.invitationsCount,
+    invitationsRedeemed: apiDistribution.invitations?.reduce((sum: number, i: any) => sum + i.usedCount, 0) || 0,
+    registrationWindowOpen: apiDistribution.isRegistrationOpen,
+    registrationWindowEnd: apiDistribution.registrationClosesAt
+      ? new Date(apiDistribution.registrationClosesAt).toLocaleString()
+      : "Open",
+  };
 
   return (
-    <AppLayout pageTitle={`Distribution Status — ${distribution.examId}`}>
+    <AppLayout pageTitle={`Distribution Status — ${distribution.examTitle}`}>
       <div className="flex flex-col gap-6">
         <div>
           <button

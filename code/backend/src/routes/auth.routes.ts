@@ -9,6 +9,7 @@ const router = Router();
 router.post('/bootstrap/owner', sensitiveActionLimiter, AuthController.bootstrapOwner);
 router.post('/auth/register', authRateLimiter, AuthController.registerStudent);
 router.post('/auth/login', authRateLimiter, AuthController.login);
+router.get('/teacher-invitations/validate', generalApiLimiter, AuthController.validateTeacherInvitation);
 router.post('/teacher-invitations/redeem', sensitiveActionLimiter, AuthController.redeemTeacherInvitation);
 router.post('/auth/forgot-password', sensitiveActionLimiter, AuthController.forgotPassword);
 router.post('/auth/reset-password', sensitiveActionLimiter, AuthController.resetPassword);
@@ -20,14 +21,29 @@ router.post('/auth/refresh-token', authRateLimiter, AuthController.refreshToken)
 router.get('/auth/me', generalApiLimiter, authenticate, AuthController.getMe);
 router.post('/auth/logout', generalApiLimiter, AuthController.logout);
 router.post('/auth/profile-photo', generalApiLimiter, authenticate, AuthController.uploadProfilePhoto);
+router.post('/auth/change-password', sensitiveActionLimiter, authenticate, AuthController.changePassword);
 
 // Owner-Only Routes
+router.get(
+  '/owner/teacher-invitations',
+  generalApiLimiter,
+  authenticate,
+  requireRole('OWNER'),
+  AuthController.listTeacherInvitations
+);
 router.post(
   '/owner/teacher-invitations',
   generalApiLimiter,
   authenticate,
   requireRole('OWNER'),
   AuthController.issueTeacherInvitation
+);
+router.post(
+  '/owner/teacher-invitations/:id/revoke',
+  sensitiveActionLimiter,
+  authenticate,
+  requireRole('OWNER'),
+  AuthController.revokeTeacherInvitation
 );
 
 export default router;

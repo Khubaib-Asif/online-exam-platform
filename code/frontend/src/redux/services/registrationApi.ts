@@ -7,6 +7,7 @@ export interface CatalogueExam {
   accessPolicy: 'PUBLIC' | 'INVITATION_ONLY' | 'APPROVAL_REQUIRED';
   startsAt: string;
   closesAt: string;
+  lateEntryGraceMinutes?: number;
   registrationOpensAt: string;
   registrationClosesAt: string;
   teacherName: string;
@@ -28,8 +29,12 @@ export interface StudentRegistrationItem {
   examTitle: string;
   teacherName: string;
   status: 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED';
+  sessionStatus?: 'ENTRY_GATES' | 'PENDING' | 'ACTIVE' | 'PAUSED_RECONNECT' | 'SUBMITTED' | 'AUTO_SUBMITTED' | 'TERMINATED' | 'GRADING' | 'GRADED' | 'PUBLISHED' | null;
   startsAt: string;
   closesAt: string;
+  lateEntryGraceMinutes?: number;
+  registrationOpensAt?: string | null;
+  registrationClosesAt?: string | null;
   requestedAt: string;
   approvedAt: string | null;
 }
@@ -43,6 +48,11 @@ export interface PendingRegistrationRequest {
   studentEmail: string;
   requestedAt: string;
   status: string;
+  registrationOpensAt?: string | null;
+  registrationClosesAt?: string | null;
+  startsAt?: string | null;
+  closesAt?: string | null;
+  isRegistrationOpen?: boolean;
 }
 
 // Lazy Load Base Query
@@ -93,7 +103,7 @@ export const registrationApi = createApi({
     }),
 
     // Redeem Invitation Token
-    redeemExamInvitation: builder.mutation<any, { token: string }>({
+    redeemExamInvitation: builder.mutation<any, { token: string; examId?: string }>({
       query: (data) => ({
         url: '/exams/invitations/redeem',
         method: 'POST',

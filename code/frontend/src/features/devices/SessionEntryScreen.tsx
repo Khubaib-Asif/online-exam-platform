@@ -11,7 +11,7 @@ export const SessionEntryScreen: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const targetExamId = examId || "";
+  const targetExamId = examId || searchParams.get("examId") || "";
   const existingTicket = searchParams.get("ticket") || "";
 
   const { data: examDetails, isLoading: isExamLoading } = useGetExamDetailsQuery(targetExamId, {

@@ -444,14 +444,45 @@ export const LiveExamSessionScreen: React.FC = () => {
 
   // Format Timer Strings
   const formatSeconds = (sec: number) => {
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
+    const safeSec = Math.max(0, sec || 0);
+    const h = Math.floor(safeSec / 3600);
+    const m = Math.floor((safeSec % 3600) / 60);
+    const s = safeSec % 60;
     if (h > 0) {
       return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
     }
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
+
+  // Determine the single active timer to display based on timing mode and deadlines
+  const getActiveTimer = () => {
+    const timingMode = session?.timingMode || "WHOLE_PAPER";
+
+    if (timingMode === "QUESTION_TIMED" || (timingMode === "MIXED" && questionSecondsRemaining !== null)) {
+      return {
+        label: "Question",
+        seconds: questionSecondsRemaining ?? 0,
+        title: "Current Question Time Remaining",
+      };
+    }
+
+    if (timingMode === "SECTION_TIMED" || (timingMode === "MIXED" && sectionSecondsRemaining !== null)) {
+      return {
+        label: "Section",
+        seconds: sectionSecondsRemaining ?? 0,
+        title: "Current Section Time Remaining",
+      };
+    }
+
+    // Default: Whole Paper Timer
+    return {
+      label: "Paper",
+      seconds: paperSecondsRemaining,
+      title: "Total Paper Time Remaining",
+    };
+  };
+
+  const activeTimer = getActiveTimer();
 
   // Current Question helper
   const currentQ = session?.currentQuestion;
@@ -515,8 +546,8 @@ export const LiveExamSessionScreen: React.FC = () => {
           </div>
         </div>
 
-        {/* Header Right: Connection & Authoritative Countdown */}
-        <div className="flex items-center gap-5">
+        {/* Header Right: Connection & Single Unified Authoritative Countdown */}
+        <div className="flex items-center gap-3 md:gap-4">
           <div className="flex items-center gap-1.5 text-xs font-mono">
             {isOnline ? (
               <span className="text-emerald-400 flex items-center gap-1">
@@ -531,18 +562,13 @@ export const LiveExamSessionScreen: React.FC = () => {
             )}
           </div>
 
-          {/* Question / Section Timer if active */}
-          {questionSecondsRemaining !== null && (
-            <div className="bg-amber-950/80 border border-amber-800 text-amber-300 px-3 py-1 rounded text-xs font-mono font-bold flex items-center gap-1.5 shadow-inner">
-              <Clock className="w-3.5 h-3.5" />
-              <span>Q-Timer: {questionSecondsRemaining}s</span>
-            </div>
-          )}
-
-          {/* Paper Deadline Clock */}
-          <div className="bg-slate-800 border border-slate-700 px-3.5 py-1.5 rounded-md flex items-center gap-2 text-sm font-mono font-bold text-[#38BDF8] shadow-inner">
-            <Clock className="w-4 h-4 text-[#38BDF8]" />
-            <span>{formatSeconds(paperSecondsRemaining)}</span>
+          {/* Single Authoritative Timer Badge */}
+          <div
+            className="bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-md flex items-center gap-1.5 text-xs sm:text-sm font-mono font-bold text-[#38BDF8] shadow-inner"
+            title={activeTimer.title}
+          >
+            <Clock className="w-3.5 h-3.5 text-[#38BDF8]" />
+            <span>{activeTimer.label}: {formatSeconds(activeTimer.seconds)}</span>
           </div>
 
           <Button
@@ -567,7 +593,7 @@ export const LiveExamSessionScreen: React.FC = () => {
         )}
 
         {/* Section & Progress Bar */}
-        <div className="bg-white border border-slate-200 rounded-md p-4 shadow-2xs flex items-center justify-between text-xs">
+        <div className="bg-white border border-slate-200 rounded-md p-4 shadow-2xs flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="font-bold text-slate-900 flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-[#4C70A6]" />
             <span>{session?.sectionTitle || "General Section"}</span>
@@ -594,9 +620,6 @@ export const LiveExamSessionScreen: React.FC = () => {
                   <Badge variant="info" className="text-[10px] font-mono uppercase">
                     {currentQ.type.replace("_", " ")}
                   </Badge>
-                  <span className="text-xs text-slate-400 font-mono">
-                    Question ID: {currentQ.id.slice(0, 8)}
-                  </span>
                 </div>
                 <h2 className="text-base font-bold text-slate-900 leading-relaxed whitespace-pre-wrap">
                   {currentQ.prompt}
