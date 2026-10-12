@@ -292,28 +292,7 @@ export class QuestionBankService {
     });
 
     if (!question) {
-      return {
-        id: questionId,
-        bankId: 'qb-default',
-        bankName: 'General Question Bank',
-        active: true,
-        versions: [
-          {
-            id: 'v-fallback',
-            versionNumber: 1,
-            type: 'MCQ',
-            content: 'Sample Question Baseline Prompt',
-            options: ['Option A', 'Option B', 'Option C', 'Option D'],
-            answerKey: 'Option A',
-            rubric: null,
-            keywords: [],
-            marks: 4,
-            tags: ['General'],
-            contentHash: '0000000000000000000000000000000000000000000000000000000000000000',
-            createdAt: new Date().toISOString(),
-          },
-        ],
-      };
+      throw new AppError(404, 'Question not found', 'QUESTION_NOT_FOUND');
     }
 
     if (question.bank.ownerId !== teacherUserId) {

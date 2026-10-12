@@ -17,6 +17,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { useGetExamCatalogueQuery } from "@/redux/services/registrationApi";
+import { formatDateTime } from "@/utils/dateTime";
 
 export interface CatalogueExamItem {
   id: string;
@@ -27,55 +28,9 @@ export interface CatalogueExamItem {
   totalQuestions: number;
   startDate: string;
   endDate: string;
+  registrationClosesAt: string;
   registrationState: "NOT_REGISTERED" | "REQUEST_PENDING" | "REGISTERED" | "REJECTED" | "EXPIRED";
 }
-
-const mockExams: CatalogueExamItem[] = [
-  {
-    id: "ex-401",
-    title: "CS 401 — Distributed Systems & Architecture",
-    teacherName: "Dr. Sarah Jenkins",
-    policy: "APPROVAL_REQUIRED",
-    durationMinutes: 120,
-    totalQuestions: 45,
-    startDate: "Aug 10, 2026 09:00 AM",
-    endDate: "Aug 10, 2026 11:00 AM",
-    registrationState: "NOT_REGISTERED",
-  },
-  {
-    id: "ex-202",
-    title: "MATH 202 — Advanced Multivariable Calculus",
-    teacherName: "Prof. Robert Vance",
-    policy: "PUBLIC",
-    durationMinutes: 90,
-    totalQuestions: 30,
-    startDate: "Aug 12, 2026 02:00 PM",
-    endDate: "Aug 12, 2026 03:30 PM",
-    registrationState: "REGISTERED",
-  },
-  {
-    id: "ex-305",
-    title: "PHYS 305 — Quantum Mechanics Fundamentals",
-    teacherName: "Dr. Elena Rostova",
-    policy: "INVITATION_ONLY",
-    durationMinutes: 150,
-    totalQuestions: 40,
-    startDate: "Aug 15, 2026 10:00 AM",
-    endDate: "Aug 15, 2026 12:30 PM",
-    registrationState: "NOT_REGISTERED",
-  },
-  {
-    id: "ex-101",
-    title: "ENG 101 — Academic Writing & Critical Thinking",
-    teacherName: "Prof. Alan Turing",
-    policy: "PUBLIC",
-    durationMinutes: 60,
-    totalQuestions: 20,
-    startDate: "Aug 18, 2026 01:00 PM",
-    endDate: "Aug 18, 2026 02:00 PM",
-    registrationState: "REQUEST_PENDING",
-  },
-];
 
 export const ExamCatalogueScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -87,19 +42,23 @@ export const ExamCatalogueScreen: React.FC = () => {
     policy: policyFilter !== "ALL" ? policyFilter : undefined,
   });
 
-  const activeExamsList: CatalogueExamItem[] = (apiCatalogueData && apiCatalogueData.length > 0)
-    ? apiCatalogueData.map((e) => ({
-        id: e.id,
-        title: e.title,
-        teacherName: e.teacherName,
-        policy: e.accessPolicy as any,
-        durationMinutes: e.durationMinutes,
-        totalQuestions: e.totalQuestions,
-        startDate: new Date(e.startsAt).toLocaleDateString(),
-        endDate: new Date(e.closesAt).toLocaleDateString(),
-        registrationState: e.registrationState === "APPROVED" ? "REGISTERED" : e.registrationState === "REQUESTED" ? "REQUEST_PENDING" : (e.registrationState as any),
-      }))
-    : mockExams;
+  const activeExamsList: CatalogueExamItem[] = (apiCatalogueData || []).map((e) => ({
+    id: e.id,
+    title: e.title,
+    teacherName: e.teacherName,
+    policy: e.accessPolicy as any,
+    durationMinutes: e.durationMinutes,
+    totalQuestions: e.totalQuestions,
+    startDate: formatDateTime(e.startsAt),
+    endDate: formatDateTime(e.closesAt),
+    registrationClosesAt: formatDateTime(e.registrationClosesAt),
+    registrationState:
+      e.registrationState === "APPROVED"
+        ? "REGISTERED"
+        : e.registrationState === "REQUESTED"
+        ? "REQUEST_PENDING"
+        : (e.registrationState as any),
+  }));
 
   const filteredExams = activeExamsList.filter((exam) => {
     const matchesSearch =
@@ -239,22 +198,25 @@ export const ExamCatalogueScreen: React.FC = () => {
 
                   <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 bg-slate-50/70 p-3 rounded-md border border-slate-100 font-mono">
                     <div className="flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
+                      <Clock className="w-3.5 h-3.5 text-[#4C70A6]" />
                       <span>{exam.durationMinutes} mins</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <BookOpen className="w-3.5 h-3.5 text-slate-400" />
+                      <BookOpen className="w-3.5 h-3.5 text-[#4C70A6]" />
                       <span>{exam.totalQuestions} questions</span>
                     </div>
-                    <div className="flex items-center gap-1.5 col-span-2">
-                      <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                      <span>{exam.startDate}</span>
+                    <div className="flex items-center gap-1.5 col-span-2 text-slate-800">
+                      <Calendar className="w-3.5 h-3.5 text-[#4C70A6] shrink-0" />
+                      <span className="truncate">Starts: <strong className="text-slate-900">{exam.startDate}</strong></span>
+                    </div>
+                    <div className="flex items-center gap-1.5 col-span-2 text-slate-500 text-[11px]">
+                      <Clock className="w-3 h-3 text-amber-600 shrink-0" />
+                      <span className="truncate">Reg. Closes: {exam.registrationClosesAt}</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between">
-                  <span className="text-xs text-slate-400 font-mono">ID: {exam.id}</span>
+                <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-end">
                   <Button
                     variant="primary"
                     size="sm"

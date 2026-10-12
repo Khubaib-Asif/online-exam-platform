@@ -38,7 +38,7 @@ export class EmailService {
 
   // 1. Send Teacher Invitation Email
   static async sendTeacherInvitation(toEmail: string, invitationToken: string) {
-    const inviteUrl = `${env.FRONTEND_URL}/redeem-invite?token=${invitationToken}`;
+    const inviteUrl = `${env.FRONTEND_URL}/activate-teacher?token=${invitationToken}`;
 
     try {
       const transporter = await this.getTransporter();
@@ -94,6 +94,13 @@ export class EmailService {
   static async sendExamInvitation(toEmail: string, invitationToken: string) {
     const inviteUrl = `${env.FRONTEND_URL}/redeem-invitation?code=${invitationToken}`;
 
+    console.log(`\n======================================================`);
+    console.log(`✉️ [EXAM INVITATION EMAIL DISPATCHED]`);
+    console.log(`Recipient: ${toEmail}`);
+    console.log(`Invitation Code: ${invitationToken}`);
+    console.log(`Direct Magic Link: ${inviteUrl}`);
+    console.log(`======================================================\n`);
+
     try {
       const transporter = await this.getTransporter();
       const info = await transporter.sendMail({
@@ -102,10 +109,10 @@ export class EmailService {
         subject: 'Exam Invitation Code - Online Exam Platform',
         html: `
           <h2>Exam Access Invitation</h2>
-          <p>You have received a direct invitation code for an examination session.</p>
-          <p>Your Invitation Code: <strong>${invitationToken}</strong></p>
-          <p><a href="${inviteUrl}" style="padding: 10px 20px; background-color: #3b82f6; color: white; text-decoration: none; border-radius: 4px;">Redeem Invitation</a></p>
-          <p>Or copy this link: ${inviteUrl}</p>
+          <p>You have received a direct invitation for an examination session.</p>
+          <p>Your Unique Access Code: <strong style="font-size: 16px; font-family: monospace; background: #f1f5f9; padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 4px;">${invitationToken}</strong></p>
+          <p style="margin-top: 20px;"><a href="${inviteUrl}" style="padding: 10px 20px; background-color: #4C70A6; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">Redeem & Register for Exam</a></p>
+          <p style="margin-top: 15px; font-size: 12px; color: #64748b;">Or copy this link to your browser: ${inviteUrl}</p>
         `,
       });
 

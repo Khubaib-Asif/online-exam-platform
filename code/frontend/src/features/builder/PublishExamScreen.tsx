@@ -24,10 +24,50 @@ export const PublishExamScreen: React.FC = () => {
     0
   );
 
+  const paperDurationSeconds = apiDetails?.paperDurationSeconds || (apiDetails?.durationMinutes ? apiDetails.durationMinutes * 60 : 7200);
+  const timingMode = apiDetails?.timingMode || "WHOLE_PAPER";
+
+  // 1. Unique Section Names Check
+  const sectionTitles = sections.map((s) => s.title.trim().toLowerCase());
+  const isSectionNamesUnique = sections.length === 0 || new Set(sectionTitles).size === sectionTitles.length;
+
+  // 2. Section Timing Invariant Check (Strict sum equality across ALL modes)
+  const allSectionsHaveDuration = sections.length > 0 && sections.every((s) => s.durationSeconds && s.durationSeconds > 0);
+  const sumSectionSeconds = sections.reduce((sum, s) => sum + (s.durationSeconds || 0), 0);
+  const isSectionTimingValid = allSectionsHaveDuration && sumSectionSeconds === paperDurationSeconds;
+
+  // 3. Question Timing Invariant Check
+  const anySectionHasTimedQuestions = sections.some((s) => s.questions.some((q) => q.timeLimitSeconds && q.timeLimitSeconds > 0));
+  const allQuestionsHaveTimeLimit = sections.length > 0 && sections.every((s) => 
+    s.questions.length > 0 && s.questions.every((q) => q.timeLimitSeconds && q.timeLimitSeconds > 0)
+  );
+  const allSectionQuestionSumsMatch = sections.every((s) => {
+    const sumQ = s.questions.reduce((sum, q) => sum + (q.timeLimitSeconds || 0), 0);
+    return sumQ === (s.durationSeconds || 0);
+  });
+  const areConfiguredQuestionTimesValid = sections.every((s) => {
+    const timedQ = s.questions.filter((q) => q.timeLimitSeconds && q.timeLimitSeconds > 0);
+    if (timedQ.length === 0) return true;
+    if (timedQ.length !== s.questions.length) return false;
+    const sumQ = timedQ.reduce((sum, q) => sum + (q.timeLimitSeconds || 0), 0);
+    return sumQ === (s.durationSeconds || 0);
+  });
+
+  const isQuestionTimingValid = timingMode === "QUESTION_TIMED"
+    ? allQuestionsHaveTimeLimit && allSectionQuestionSumsMatch
+    : !anySectionHasTimedQuestions || areConfiguredQuestionTimesValid;
+
+  const canPublish =
+    sections.length > 0 &&
+    totalQuestions > 0 &&
+    isSectionNamesUnique &&
+    isSectionTimingValid &&
+    isQuestionTimingValid;
+
   const isExamAlreadyPublished = apiDetails?.status === "PUBLISHED";
 
   const handlePublish = async () => {
-    if (!targetId) return;
+    if (!targetId || !canPublish) return;
     setErrorMessage(null);
 
     try {
@@ -63,8 +103,7 @@ export const PublishExamScreen: React.FC = () => {
                 <span>Publish Exam Revision</span>
               </h1>
               <p className="text-xs text-slate-500 mt-1">
-                Exam: <span className="font-semibold text-slate-900">{apiDetails?.title}</span> • ID:{" "}
-                <span className="font-mono text-slate-400">{targetId}</span>
+                Exam: <span className="font-semibold text-slate-900">{apiDetails?.title}</span>
               </p>
             </div>
             <Badge variant={isExamAlreadyPublished || isPublished ? "success" : "warning"}>
@@ -90,7 +129,7 @@ export const PublishExamScreen: React.FC = () => {
                   Exam Revision Frozen & Published!
                 </h3>
                 <p className="text-xs text-emerald-700 mt-1 max-w-md">
-                  This examination revision has been frozen into PostgreSQL. Content hash, question versions, and access rules are locked into immutable state.
+                  This examination revision has been frozen . Content hash, question versions, and access rules are locked into immutable state.
                 </p>
               </div>
               <div className="flex items-center gap-3 mt-2">
@@ -133,6 +172,20 @@ export const PublishExamScreen: React.FC = () => {
 
                   <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200/80 rounded-md text-xs">
                     <div className="flex items-center gap-2">
+                      {isSectionNamesUnique ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      ) : (
+                        <XCircle className="w-4 h-4 text-red-500 shrink-0" />
+                      )}
+                      <span className="font-semibold text-slate-900">Unique Section Titles</span>
+                    </div>
+                    <span className={`font-mono font-bold ${isSectionNamesUnique ? "text-emerald-700" : "text-red-600"}`}>
+                      {isSectionNamesUnique ? "All Section Names Unique" : "Duplicate Section Names Detected"}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200/80 rounded-md text-xs">
+                    <div className="flex items-center gap-2">
                       {totalQuestions > 0 ? (
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                       ) : (
@@ -149,9 +202,45 @@ export const PublishExamScreen: React.FC = () => {
                       <span className="font-semibold text-slate-900">Timing Mode & Paper Duration</span>
                     </div>
                     <span className="font-mono text-slate-700 font-bold">
-                      {apiDetails?.timingMode || "WHOLE_PAPER"} • {apiDetails?.durationMinutes || 120} Mins
+                      {timingMode} • {Math.round(paperDurationSeconds / 60)} Mins
                     </span>
                   </div>
+
+                  <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200/80 rounded-md text-xs">
+                    <div className="flex items-center gap-2">
+                      {isSectionTimingValid ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      ) : (
+                        <XCircle className="w-4 h-4 text-red-500 shrink-0" />
+                      )}
+                      <span className="font-semibold text-slate-900">Section Durations Allocation</span>
+                    </div>
+                    <span className={`font-mono font-bold ${isSectionTimingValid ? "text-emerald-700" : "text-red-600"}`}>
+                      {allSectionsHaveDuration
+                        ? `Sum: ${Math.round(sumSectionSeconds / 60)}m / ${Math.round(paperDurationSeconds / 60)}m ${
+                            isSectionTimingValid ? "(Fully Allocated)" : "(Mismatch)"
+                          }`
+                        : "Missing Section Duration"}
+                    </span>
+                  </div>
+
+                  {(timingMode === "QUESTION_TIMED" || anySectionHasTimedQuestions) && (
+                    <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200/80 rounded-md text-xs">
+                      <div className="flex items-center gap-2">
+                        {isQuestionTimingValid ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-red-500 shrink-0" />
+                        )}
+                        <span className="font-semibold text-slate-900">Per-Question Time Limits</span>
+                      </div>
+                      <span className={`font-mono font-bold ${isQuestionTimingValid ? "text-emerald-700" : "text-red-600"}`}>
+                        {isQuestionTimingValid
+                          ? "Question Times Equal Section Duration"
+                          : "Incomplete / Sum Mismatch with Section"}
+                      </span>
+                    </div>
+                  )}
 
                   <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200/80 rounded-md text-xs">
                     <div className="flex items-center gap-2">
@@ -168,19 +257,21 @@ export const PublishExamScreen: React.FC = () => {
                 <div>
                   <span className="font-bold">Publication Freeze Warning:</span>
                   <p className="mt-0.5 text-amber-800 leading-relaxed">
-                    Publishing freezes all attached question versions, section structures, and timing rules into an immutable revision in PostgreSQL.
+                    Publishing freezes all attached question versions, section structures, and timing rules into an immutable revision .
                   </p>
                 </div>
               </div>
 
               <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
-                <span className="text-xs text-slate-400 font-mono">Status: Ready for revision freeze</span>
+                <span className="text-xs text-slate-400 font-mono">
+                  {canPublish ? "Status: Ready for revision freeze" : "Status: Blocked until timing requirements are met"}
+                </span>
                 <Button
                   variant="primary"
                   size="lg"
                   onClick={handlePublish}
                   isLoading={isPublishing}
-                  disabled={sections.length === 0 || totalQuestions === 0}
+                  disabled={!canPublish}
                   icon={<Send className="w-4 h-4" />}
                 >
                   Freeze & Publish Revision

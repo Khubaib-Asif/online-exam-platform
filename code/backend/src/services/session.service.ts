@@ -34,56 +34,82 @@ export interface SessionProjection {
 }
 
 export class SessionService {
-  // Helper: Extract flat ordered list of questions across all sections
-  private static getOrderedQuestions(revision: any) {
-    const questions: Array<{
+  // Helper: Build authoritative synchronous schedule across sections and questions
+  private static buildSynchronousTimeline(exam: any, revision: any) {
+    const startsAt = exam?.startsAt ? new Date(exam.startsAt) : new Date();
+    const paperDurationSeconds = revision.paperDurationSeconds || 7200;
+    const paperDeadline = exam?.closesAt ? new Date(exam.closesAt) : new Date(startsAt.getTime() + paperDurationSeconds * 1000);
+
+    const sortedSections = [...(revision.sections || [])].sort((a: any, b: any) => a.orderIndex - b.orderIndex);
+
+    let currentSecStartMs = startsAt.getTime();
+    const sectionSchedules = sortedSections.map((sec: any, secIdx: number) => {
+      const durSec = sec.durationSeconds || Math.round(paperDurationSeconds / Math.max(1, sortedSections.length));
+      const startAt = new Date(currentSecStartMs);
+      const endAt = new Date(currentSecStartMs + durSec * 1000);
+      currentSecStartMs = endAt.getTime();
+      return {
+        sectionId: sec.id,
+        sectionIndex: secIdx,
+        sectionTitle: sec.title,
+        durationSeconds: durSec,
+        startAt,
+        endAt,
+      };
+    });
+
+    let currentQStartMs = startsAt.getTime();
+    const questionTimeline: Array<{
       examQuestionId: string;
+      questionIndex: number;
+      sectionIndex: number;
       sectionId: string;
       sectionTitle: string;
-      sectionIndex: number;
       sectionDurationSeconds?: number | null;
       questionVersion: any;
       marks: number;
       timeLimitSeconds?: number | null;
+      sectionStartAt: Date;
+      sectionEndAt: Date;
+      questionStartAt: Date;
+      questionEndAt: Date;
     }> = [];
 
-    const sortedSections = [...(revision.sections || [])].sort((a: any, b: any) => a.orderIndex - b.orderIndex);
+    let qIndex = 0;
     sortedSections.forEach((sec: any, secIdx: number) => {
+      const secSched = sectionSchedules[secIdx];
       const sortedQ = [...(sec.questions || [])].sort((a: any, b: any) => a.orderIndex - b.orderIndex);
+
       sortedQ.forEach((eq: any) => {
-        questions.push({
+        const qTimeLimit = eq.timeLimitSeconds || (secSched.durationSeconds ? Math.round(secSched.durationSeconds / Math.max(1, sortedQ.length)) : 300);
+        const qStartAt = new Date(currentQStartMs);
+        const qEndAt = new Date(currentQStartMs + qTimeLimit * 1000);
+        currentQStartMs = qEndAt.getTime();
+
+        questionTimeline.push({
           examQuestionId: eq.id,
+          questionIndex: qIndex,
+          sectionIndex: secIdx,
           sectionId: sec.id,
           sectionTitle: sec.title,
-          sectionIndex: secIdx,
           sectionDurationSeconds: sec.durationSeconds,
           questionVersion: eq.questionVersion,
           marks: eq.marksOverride || eq.questionVersion.marks,
           timeLimitSeconds: eq.timeLimitSeconds,
+          sectionStartAt: secSched.startAt,
+          sectionEndAt: secSched.endAt,
+          questionStartAt: qStartAt,
+          questionEndAt: qEndAt,
         });
+        qIndex++;
       });
     });
 
-    return questions;
-  }
-
-  // Helper: Format question options safely (strips answer keys)
-  private static parseSafeOptions(rawOptions: string | null) {
-    if (!rawOptions) return undefined;
-    try {
-      const parsed = JSON.parse(rawOptions);
-      if (Array.isArray(parsed)) {
-        return parsed.map((opt: any, idx: number) => {
-          if (typeof opt === 'string') {
-            return { id: `opt-${idx}`, text: opt };
-          }
-          return { id: opt.id || `opt-${idx}`, text: opt.text || opt.label || String(opt) };
-        });
-      }
-      return undefined;
-    } catch {
-      return undefined;
-    }
+    return {
+      paperDeadline,
+      sectionSchedules,
+      questionTimeline,
+    };
   }
 
   // 1. Start or Resume Session (M6-S01)
@@ -106,7 +132,7 @@ export class SessionService {
         ? { id: targetSessionId, userId }
         : { examId, userId },
       include: {
-        exam: { select: { id: true, title: true } },
+        exam: { select: { id: true, title: true, startsAt: true, closesAt: true, lateEntryGraceMinutes: true } },
         revision: {
           include: {
             sections: {
@@ -128,61 +154,218 @@ export class SessionService {
       throw new AppError(404, 'Exam session not found. Please complete the security gates first.', 'SESSION_NOT_FOUND');
     }
 
-    const orderedQuestions = this.getOrderedQuestions(session.revision);
+    if (
+      ['SUBMITTED', 'AUTO_SUBMITTED', 'TERMINATED', 'GRADING', 'GRADED', 'PUBLISHED'].includes(session.status)
+    ) {
+      throw new AppError(
+        400,
+        'You have already completed and submitted this examination. Re-entry is not permitted.',
+        'EXAM_ALREADY_SUBMITTED'
+      );
+    }
+
+    const exam = session.exam;
+    const now = new Date();
+
+    if (exam) {
+      if (exam.startsAt && now < exam.startsAt) {
+        throw new AppError(
+          400,
+          `The examination has not started yet. Starts at ${exam.startsAt.toLocaleString()}`,
+          'EXAM_NOT_STARTED'
+        );
+      }
+      if (exam.closesAt && now > exam.closesAt) {
+        throw new AppError(400, 'The examination window has closed.', 'EXAM_CLOSED');
+      }
+    }
+
+    const timeline = this.buildSynchronousTimeline(exam, session.revision);
+    const orderedQuestions = timeline.questionTimeline;
+
     if (orderedQuestions.length === 0) {
       throw new AppError(400, 'Exam has no questions published.', 'NO_QUESTIONS');
     }
 
-    const now = new Date();
-
-    // If session is still in ENTRY_GATES or PENDING -> Initialize QuestionAttempts & Authoritative Deadlines
+    // If session is still in ENTRY_GATES or PENDING -> Initialize QuestionAttempts & Synchronous Deadlines
     if (session.status === 'ENTRY_GATES' || session.status === 'PENDING') {
-      const paperDuration = session.revision.paperDurationSeconds || 7200;
-      const paperDeadline = new Date(now.getTime() + paperDuration * 1000);
-
-      let sectionDeadline: Date | null = null;
-      if (
-        (session.revision.timingMode === 'SECTION_TIMED' || session.revision.timingMode === 'MIXED') &&
-        orderedQuestions[0]?.sectionDurationSeconds
-      ) {
-        sectionDeadline = new Date(now.getTime() + orderedQuestions[0].sectionDurationSeconds * 1000);
+      if (exam?.startsAt) {
+        const graceMinutes = exam.lateEntryGraceMinutes ?? 15;
+        const lateCutoffMs = exam.startsAt.getTime() + graceMinutes * 60 * 1000;
+        if (now.getTime() > lateCutoffMs) {
+          throw new AppError(
+            400,
+            `Late entry is closed. The allowed entry window of ${graceMinutes} minutes after exam start has elapsed.`,
+            'LATE_ENTRY_DENIED'
+          );
+        }
       }
 
-      let questionDeadline: Date | null = null;
-      if (
-        (session.revision.timingMode === 'QUESTION_TIMED' || session.revision.timingMode === 'MIXED') &&
-        orderedQuestions[0]?.timeLimitSeconds
-      ) {
-        questionDeadline = new Date(now.getTime() + orderedQuestions[0].timeLimitSeconds * 1000);
+      const timingMode = session.revision.timingMode || 'WHOLE_PAPER';
+      const paperDeadline = timeline.paperDeadline;
+
+      let targetQuestionIndex = 0;
+      let targetSectionIndex = 0;
+      let activeSectionDeadline: Date | null = null;
+      let activeQuestionDeadline: Date | null = null;
+
+      const attemptInitialStates: Array<{
+        examQuestionId: string;
+        orderIndexAtStart: number;
+        outcome: 'NOT_STARTED' | 'ACTIVE' | 'TIMED_OUT' | 'SKIPPED_BY_SECTION_TIMEOUT';
+        activeAt: Date | null;
+        terminalAt: Date | null;
+      }> = [];
+
+      if (timingMode === 'QUESTION_TIMED') {
+        let foundActive = false;
+
+        for (let i = 0; i < orderedQuestions.length; i++) {
+          const q = orderedQuestions[i];
+          if (now >= q.questionEndAt) {
+            attemptInitialStates.push({
+              examQuestionId: q.examQuestionId,
+              orderIndexAtStart: i,
+              outcome: 'TIMED_OUT',
+              activeAt: null,
+              terminalAt: q.questionEndAt,
+            });
+          } else if (!foundActive && now >= q.questionStartAt && now < q.questionEndAt) {
+            foundActive = true;
+            targetQuestionIndex = i;
+            targetSectionIndex = q.sectionIndex;
+            activeQuestionDeadline = q.questionEndAt;
+            activeSectionDeadline = q.sectionEndAt;
+
+            attemptInitialStates.push({
+              examQuestionId: q.examQuestionId,
+              orderIndexAtStart: i,
+              outcome: 'ACTIVE',
+              activeAt: now,
+              terminalAt: null,
+            });
+          } else {
+            attemptInitialStates.push({
+              examQuestionId: q.examQuestionId,
+              orderIndexAtStart: i,
+              outcome: 'NOT_STARTED',
+              activeAt: null,
+              terminalAt: null,
+            });
+          }
+        }
+
+        if (!foundActive && now >= timeline.paperDeadline) {
+          return this.autoSubmitExpiredExam(session, orderedQuestions, 'PAPER_TIMEOUT');
+        }
+
+        if (!foundActive && attemptInitialStates.length > 0) {
+          const firstPending = attemptInitialStates.findIndex((a) => a.outcome === 'NOT_STARTED');
+          if (firstPending !== -1) {
+            targetQuestionIndex = firstPending;
+            targetSectionIndex = orderedQuestions[firstPending].sectionIndex;
+            activeQuestionDeadline = orderedQuestions[firstPending].questionEndAt;
+            activeSectionDeadline = orderedQuestions[firstPending].sectionEndAt;
+            attemptInitialStates[firstPending].outcome = 'ACTIVE';
+            attemptInitialStates[firstPending].activeAt = now;
+          }
+        }
+      } else if (timingMode === 'SECTION_TIMED') {
+        let foundActive = false;
+
+        for (let i = 0; i < orderedQuestions.length; i++) {
+          const q = orderedQuestions[i];
+          if (now >= q.sectionEndAt) {
+            attemptInitialStates.push({
+              examQuestionId: q.examQuestionId,
+              orderIndexAtStart: i,
+              outcome: 'SKIPPED_BY_SECTION_TIMEOUT',
+              activeAt: null,
+              terminalAt: q.sectionEndAt,
+            });
+          } else if (!foundActive && now >= q.sectionStartAt && now < q.sectionEndAt) {
+            foundActive = true;
+            targetSectionIndex = q.sectionIndex;
+            activeSectionDeadline = q.sectionEndAt;
+            targetQuestionIndex = i;
+
+            attemptInitialStates.push({
+              examQuestionId: q.examQuestionId,
+              orderIndexAtStart: i,
+              outcome: 'ACTIVE',
+              activeAt: now,
+              terminalAt: null,
+            });
+          } else {
+            attemptInitialStates.push({
+              examQuestionId: q.examQuestionId,
+              orderIndexAtStart: i,
+              outcome: 'NOT_STARTED',
+              activeAt: null,
+              terminalAt: null,
+            });
+          }
+        }
+
+        if (!foundActive && now >= timeline.paperDeadline) {
+          return this.autoSubmitExpiredExam(session, orderedQuestions, 'PAPER_TIMEOUT');
+        }
+
+        if (!foundActive && attemptInitialStates.length > 0) {
+          const firstPending = attemptInitialStates.findIndex((a) => a.outcome === 'NOT_STARTED');
+          if (firstPending !== -1) {
+            targetQuestionIndex = firstPending;
+            targetSectionIndex = orderedQuestions[firstPending].sectionIndex;
+            activeSectionDeadline = orderedQuestions[firstPending].sectionEndAt;
+            attemptInitialStates[firstPending].outcome = 'ACTIVE';
+            attemptInitialStates[firstPending].activeAt = now;
+          }
+        }
+      } else {
+        // WHOLE_PAPER or MIXED default
+        for (let i = 0; i < orderedQuestions.length; i++) {
+          attemptInitialStates.push({
+            examQuestionId: orderedQuestions[i].examQuestionId,
+            orderIndexAtStart: i,
+            outcome: i === 0 ? 'ACTIVE' : 'NOT_STARTED',
+            activeAt: i === 0 ? now : null,
+            terminalAt: null,
+          });
+        }
+        if (timingMode === 'MIXED') {
+          activeSectionDeadline = orderedQuestions[0]?.sectionEndAt || null;
+          activeQuestionDeadline = orderedQuestions[0]?.questionEndAt || null;
+        }
       }
 
       await prisma.$transaction(async (tx) => {
-        // Create QuestionAttempt records if not existing
+        // Create initial QuestionAttempts
         if (session!.attempts.length === 0) {
-          for (let i = 0; i < orderedQuestions.length; i++) {
+          for (const item of attemptInitialStates) {
             await tx.questionAttempt.create({
               data: {
                 sessionId: session!.id,
-                examQuestionId: orderedQuestions[i].examQuestionId,
-                orderIndexAtStart: i,
-                outcome: i === 0 ? 'ACTIVE' : 'NOT_STARTED',
-                activeAt: i === 0 ? now : null,
+                examQuestionId: item.examQuestionId,
+                orderIndexAtStart: item.orderIndexAtStart,
+                outcome: item.outcome,
+                activeAt: item.activeAt,
+                terminalAt: item.terminalAt,
               },
             });
           }
         }
 
-        // Update ExamSession to ACTIVE
+        // Activate session with synchronous timeline pointers
         await tx.examSession.update({
           where: { id: session!.id },
           data: {
             status: 'ACTIVE',
             startedAt: now,
             paperDeadline,
-            sectionDeadline,
-            questionDeadline,
-            currentQuestionIndex: 0,
-            currentSectionIndex: 0,
+            sectionDeadline: activeSectionDeadline,
+            questionDeadline: activeQuestionDeadline,
+            currentQuestionIndex: targetQuestionIndex,
+            currentSectionIndex: targetSectionIndex,
             clientSequence: 1,
           },
         });
@@ -192,7 +375,7 @@ export class SessionService {
       session = await prisma.examSession.findUnique({
         where: { id: session.id },
         include: {
-          exam: { select: { id: true, title: true } },
+          exam: { select: { id: true, title: true, startsAt: true, closesAt: true, lateEntryGraceMinutes: true } },
           revision: {
             include: {
               sections: {
@@ -219,7 +402,7 @@ export class SessionService {
     const session = await prisma.examSession.findFirst({
       where: { id: sessionId, userId },
       include: {
-        exam: { select: { id: true, title: true } },
+        exam: { select: { id: true, title: true, startsAt: true, closesAt: true, lateEntryGraceMinutes: true } },
         revision: {
           include: {
             sections: {
@@ -241,7 +424,8 @@ export class SessionService {
       throw new AppError(404, 'Session not found', 'SESSION_NOT_FOUND');
     }
 
-    const orderedQuestions = this.getOrderedQuestions(session.revision);
+    const timeline = this.buildSynchronousTimeline(session.exam, session.revision);
+    const orderedQuestions = timeline.questionTimeline;
 
     // Auto-check whole-paper deadline
     if (session.status === 'ACTIVE' && session.paperDeadline && new Date() > session.paperDeadline) {
@@ -265,7 +449,7 @@ export class SessionService {
     const session = await prisma.examSession.findFirst({
       where: { id: sessionId, userId },
       include: {
-        exam: { select: { id: true, title: true } },
+        exam: { select: { id: true, title: true, startsAt: true, closesAt: true, lateEntryGraceMinutes: true } },
         revision: {
           include: {
             sections: {
@@ -291,7 +475,8 @@ export class SessionService {
       throw new AppError(400, `Cannot submit answer. Session status is ${session.status}`, 'INVALID_SESSION_STATUS');
     }
 
-    const orderedQuestions = this.getOrderedQuestions(session.revision);
+    const timeline = this.buildSynchronousTimeline(session.exam, session.revision);
+    const orderedQuestions = timeline.questionTimeline;
     const currentIndex = session.currentQuestionIndex;
     const currentQ = orderedQuestions[currentIndex];
 
@@ -345,15 +530,16 @@ export class SessionService {
           });
         }
 
-        // Section & Question Deadlines for Next Question
-        let nextSectionDeadline = session!.sectionDeadline;
-        if (nextQ.sectionIndex !== currentQ.sectionIndex && nextQ.sectionDurationSeconds) {
-          nextSectionDeadline = new Date(now.getTime() + nextQ.sectionDurationSeconds * 1000);
-        }
-
+        // Compute synchronous deadlines for next item
+        let nextSectionDeadline: Date | null = null;
         let nextQuestionDeadline: Date | null = null;
-        if (nextQ.timeLimitSeconds) {
-          nextQuestionDeadline = new Date(now.getTime() + nextQ.timeLimitSeconds * 1000);
+
+        const timingMode = session!.revision.timingMode || 'WHOLE_PAPER';
+        if (timingMode === 'QUESTION_TIMED' || timingMode === 'MIXED') {
+          nextQuestionDeadline = nextQ.questionEndAt;
+          nextSectionDeadline = nextQ.sectionEndAt;
+        } else if (timingMode === 'SECTION_TIMED') {
+          nextSectionDeadline = nextQ.sectionEndAt;
         }
 
         await tx.examSession.update({
@@ -441,7 +627,7 @@ export class SessionService {
     const session = await prisma.examSession.findFirst({
       where: { id: sessionId, userId },
       include: {
-        exam: { select: { id: true, title: true } },
+        exam: { select: { id: true, title: true, startsAt: true, closesAt: true, lateEntryGraceMinutes: true } },
         revision: {
           include: {
             sections: {
@@ -463,9 +649,11 @@ export class SessionService {
       throw new AppError(404, 'Session not found', 'SESSION_NOT_FOUND');
     }
 
+    const timeline = this.buildSynchronousTimeline(session.exam, session.revision);
+    const orderedQuestions = timeline.questionTimeline;
+
     if (session.status === 'SUBMITTED' || session.status === 'AUTO_SUBMITTED') {
-      const ordered = this.getOrderedQuestions(session.revision);
-      return this.buildSessionProjection(session, ordered);
+      return this.buildSessionProjection(session, orderedQuestions);
     }
 
     const now = new Date();
@@ -717,5 +905,21 @@ export class SessionService {
           : null,
       isComplete,
     };
+  }
+
+  private static parseSafeOptions(encryptedOptions: any): Array<{ id: string; text: string }> {
+    if (!encryptedOptions) return [];
+    try {
+      const parsed = typeof encryptedOptions === 'string' ? JSON.parse(encryptedOptions) : encryptedOptions;
+      if (Array.isArray(parsed)) {
+        return parsed.map((opt: any, idx: number) => ({
+          id: opt.id || String(idx),
+          text: opt.text || opt.label || '',
+        }));
+      }
+    } catch {
+      // fallback
+    }
+    return [];
   }
 }

@@ -24,6 +24,10 @@ export interface ResetPasswordResponse {
     message: string;
 }
 
+export interface ChangePasswordResponse {
+    message: string;
+}
+
 export interface VerifyEmailResponse {
     message: string;
 }
@@ -68,6 +72,11 @@ export interface ForgotPasswordRequest {
 export interface ResetPasswordRequest {
     token: string;
     password: string;
+}
+
+export interface ChangePasswordRequest {
+    currentPassword: string;
+    newPassword: string;
 }
 
 export interface VerifyEmailRequest {
@@ -181,6 +190,16 @@ export const authApi = createApi({
             invalidatesTags: ['User', 'Auth'],
         }),
 
+        // Authenticated Change Password
+        changePassword: builder.mutation<ChangePasswordResponse, ChangePasswordRequest>({
+            query: (data) => ({
+                url: '/change-password',
+                method: 'POST',
+                data,
+            }),
+            invalidatesTags: ['Auth'],
+        }),
+
         // Refresh Token
         refreshToken: builder.mutation<RefreshTokenResponse, RefreshTokenRequest>({
             query: (data) => ({
@@ -251,6 +270,7 @@ export const {
     useRegisterMutation,
     useForgotPasswordMutation,
     useResetPasswordMutation,
+    useChangePasswordMutation,
     useVerifyEmailMutation,
     useRequestEmailVerificationMutation,
     useVerifyEmailDirectMutation,

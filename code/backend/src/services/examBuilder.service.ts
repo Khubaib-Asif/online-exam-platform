@@ -8,10 +8,11 @@ export interface CreateExamInput {
   description?: string;
   accessPolicy: AccessPolicy;
   capacity?: number;
-  registrationOpensAt: Date;
-  registrationClosesAt: Date;
-  startsAt: Date;
-  closesAt: Date;
+  registrationOpensAt?: Date;
+  registrationClosesAt?: Date;
+  startsAt?: Date;
+  closesAt?: Date;
+  lateEntryGraceMinutes?: number;
   timingMode: TimingMode;
   paperDurationSeconds: number;
 }
@@ -53,6 +54,7 @@ export class ExamBuilderService {
         capacity: exam.capacity,
         startsAt: exam.startsAt,
         closesAt: exam.closesAt,
+        lateEntryGraceMinutes: exam.lateEntryGraceMinutes ?? 15,
         registrationOpensAt: exam.registrationOpensAt,
         registrationClosesAt: exam.registrationClosesAt,
         publishedAt: exam.publishedAt,
@@ -74,22 +76,51 @@ export class ExamBuilderService {
       throw new AppError(400, 'Exam title is required', 'INVALID_TITLE');
     }
 
+    const trimmedTitle = data.title.trim();
+
+    // Enforce unique exam title per teacher for active exams
+    const existingTitle = await prisma.exam.findFirst({
+      where: {
+        ownerId: teacherUserId,
+        title: { equals: trimmedTitle, mode: 'insensitive' },
+        status: { in: ['DRAFT', 'PUBLISHED'] },
+      },
+    });
+
+    if (existingTitle) {
+      throw new AppError(
+        409,
+        `An exam titled "${trimmedTitle}" already exists. Please choose a unique title.`,
+        'DUPLICATE_EXAM_TITLE'
+      );
+    }
+
     if (data.paperDurationSeconds <= 0) {
       throw new AppError(400, 'Paper duration must be a positive integer', 'INVALID_DURATION');
     }
 
+    const now = new Date();
+    const durationSeconds = data.paperDurationSeconds && data.paperDurationSeconds > 0 ? data.paperDurationSeconds : 7200;
+    const startsAt = data.startsAt ? new Date(data.startsAt) : new Date(Date.now() + 86400000 * 3);
+    // Enforce that exam cutoff window (closesAt) strictly equals startsAt + paperDurationSeconds
+    const closesAt = new Date(startsAt.getTime() + durationSeconds * 1000);
+    const registrationOpensAt = data.registrationOpensAt ? new Date(data.registrationOpensAt) : now;
+    const registrationClosesAt = data.registrationClosesAt ? new Date(data.registrationClosesAt) : startsAt;
+    const lateEntryGraceMinutes = data.lateEntryGraceMinutes !== undefined ? data.lateEntryGraceMinutes : 15;
+
     const exam = await prisma.exam.create({
       data: {
         ownerId: teacherUserId,
-        title: data.title.trim(),
+        title: trimmedTitle,
         description: data.description?.trim(),
         status: 'DRAFT',
         accessPolicy: data.accessPolicy,
         capacity: data.capacity,
-        registrationOpensAt: new Date(data.registrationOpensAt),
-        registrationClosesAt: new Date(data.registrationClosesAt),
-        startsAt: new Date(data.startsAt),
-        closesAt: new Date(data.closesAt),
+        registrationOpensAt,
+        registrationClosesAt,
+        startsAt,
+        closesAt,
+        lateEntryGraceMinutes,
         revisions: {
           create: {
             revisionNumber: 1,
@@ -160,6 +191,7 @@ export class ExamBuilderService {
       capacity: exam.capacity,
       startsAt: exam.startsAt,
       closesAt: exam.closesAt,
+      lateEntryGraceMinutes: exam.lateEntryGraceMinutes ?? 15,
       registrationOpensAt: exam.registrationOpensAt,
       registrationClosesAt: exam.registrationClosesAt,
       publishedAt: exam.publishedAt,
@@ -203,6 +235,55 @@ export class ExamBuilderService {
       throw new AppError(400, 'Cannot modify sections on a published exam revision', 'EXAM_ALREADY_PUBLISHED');
     }
 
+    const trimmedTitle = (title || '').trim();
+    if (!trimmedTitle) {
+      throw new AppError(400, 'Section title is required and cannot be empty.', 'INVALID_SECTION_TITLE');
+    }
+
+    // Check for duplicate section title within the same revision
+    const existingSection = await prisma.examSection.findFirst({
+      where: {
+        revisionId: exam.revisionId!,
+        title: { equals: trimmedTitle, mode: 'insensitive' },
+      },
+    });
+
+    if (existingSection) {
+      throw new AppError(
+        400,
+        `A section named "${trimmedTitle}" already exists in this examination. Each section must have a unique name.`,
+        'DUPLICATE_SECTION_TITLE'
+      );
+    }
+
+    if (durationSeconds !== undefined && durationSeconds !== null) {
+      if (durationSeconds <= 0) {
+        throw new AppError(400, 'Section duration must be greater than 0 seconds.', 'INVALID_SECTION_DURATION');
+      }
+
+      if (durationSeconds > exam.paperDurationSeconds) {
+        throw new AppError(
+          400,
+          `Section duration (${Math.round(durationSeconds / 60)} mins) cannot exceed total paper duration (${Math.round(
+            exam.paperDurationSeconds / 60
+          )} mins).`,
+          'SECTION_DURATION_EXCEEDS_PAPER'
+        );
+      }
+
+      const existingSections = exam.sections || [];
+      const sumExisting = existingSections.reduce((sum, s) => sum + (s.durationSeconds || 0), 0);
+      if (sumExisting + durationSeconds > exam.paperDurationSeconds) {
+        throw new AppError(
+          400,
+          `Cannot add section duration: Total allocated section time (${Math.round(
+            (sumExisting + durationSeconds) / 60
+          )} mins) would exceed total paper duration (${Math.round(exam.paperDurationSeconds / 60)} mins).`,
+          'TOTAL_SECTION_TIME_EXCEEDS_PAPER'
+        );
+      }
+    }
+
     const lastSection = await prisma.examSection.findFirst({
       where: { revisionId: exam.revisionId! },
       orderBy: { orderIndex: 'desc' },
@@ -213,7 +294,7 @@ export class ExamBuilderService {
     const section = await prisma.examSection.create({
       data: {
         revisionId: exam.revisionId!,
-        title: title.trim(),
+        title: trimmedTitle,
         description: description?.trim(),
         orderIndex,
         durationSeconds,
@@ -316,6 +397,26 @@ export class ExamBuilderService {
       targetVersionId = questionVersion.id;
     }
 
+    if (timeLimitSeconds && timeLimitSeconds > 0) {
+      if (section.durationSeconds && timeLimitSeconds > section.durationSeconds) {
+        throw new AppError(
+          400,
+          `Question time limit (${timeLimitSeconds}s) cannot exceed section duration (${section.durationSeconds}s).`,
+          'QUESTION_TIMELIMIT_EXCEEDS_SECTION'
+        );
+      }
+      if (section.durationSeconds) {
+        const sumOtherQ = (section.questions || []).reduce((sum, q) => sum + (q.timeLimitSeconds || 0), 0);
+        if (sumOtherQ + timeLimitSeconds > section.durationSeconds) {
+          throw new AppError(
+            400,
+            `Cannot set question time limit: Total question time limits in this section (${sumOtherQ + timeLimitSeconds}s) would exceed section duration (${section.durationSeconds}s).`,
+            'TOTAL_QUESTION_TIME_EXCEEDS_SECTION'
+          );
+        }
+      }
+    }
+
     // Safely compute next orderIndex by finding max orderIndex in section
     const lastQuestion = await prisma.examQuestion.findFirst({
       where: { sectionId },
@@ -341,6 +442,24 @@ export class ExamBuilderService {
   static async publishExam(teacherUserId: string, examId: string) {
     const examDetails = await this.getExamDetails(teacherUserId, examId);
 
+    // Enforce that no other active published exam has the same title
+    const duplicatePublished = await prisma.exam.findFirst({
+      where: {
+        ownerId: teacherUserId,
+        id: { not: examId },
+        title: { equals: examDetails.title.trim(), mode: 'insensitive' },
+        status: 'PUBLISHED',
+      },
+    });
+
+    if (duplicatePublished) {
+      throw new AppError(
+        409,
+        `Cannot publish: An active published exam with the title "${examDetails.title}" already exists. Please rename this exam before publishing.`,
+        'DUPLICATE_PUBLISHED_EXAM_TITLE'
+      );
+    }
+
     if (examDetails.sections.length === 0) {
       throw new AppError(400, 'Cannot publish an exam with 0 sections. Add at least 1 section.', 'NO_SECTIONS');
     }
@@ -350,61 +469,104 @@ export class ExamBuilderService {
       throw new AppError(400, 'Cannot publish an exam with 0 questions. Add at least 1 question.', 'NO_QUESTIONS');
     }
 
-    // Timing Invariant Check 1: Sum of section durations must equal total paper duration when section durations are defined
-    const specifiedSections = examDetails.sections.filter((s) => s.durationSeconds && s.durationSeconds > 0);
-    if (specifiedSections.length > 0) {
-      const sumSectionSeconds = specifiedSections.reduce((sum, sec) => sum + sec.durationSeconds!, 0);
+    // 1. Validate Unique Section Titles
+    const sectionTitles = examDetails.sections.map((s) => s.title.trim().toLowerCase());
+    const uniqueTitles = new Set(sectionTitles);
+    if (uniqueTitles.size !== sectionTitles.length) {
+      const duplicates = examDetails.sections
+        .map((s) => s.title.trim())
+        .filter((title, idx, arr) => arr.findIndex((t) => t.toLowerCase() === title.toLowerCase()) !== idx);
+      throw new AppError(
+        400,
+        `Duplicate section name detected: "${duplicates[0] || 'Unknown'}". Every section in the examination must have a unique name.`,
+        'DUPLICATE_SECTION_NAME'
+      );
+    }
 
-      if (examDetails.timingMode === 'SECTION_TIMED' || examDetails.timingMode === 'MIXED') {
-        if (sumSectionSeconds !== examDetails.paperDurationSeconds) {
-          throw new AppError(
-            400,
-            `Section timing mismatch: Sum of section durations (${Math.round(
-              sumSectionSeconds / 60
-            )} mins) must equal total paper duration (${Math.round(
-              examDetails.paperDurationSeconds / 60
-            )} mins).`,
-            'SECTION_TIMING_INVARIANT_VIOLATION'
-          );
-        }
-      } else if (sumSectionSeconds > examDetails.paperDurationSeconds) {
+    // 2. Validate Section Durations (Enforced across ALL timing modes: WHOLE_PAPER, SECTION_TIMED, QUESTION_TIMED, MIXED)
+    // Every section must have an explicit duration > 0
+    for (const sec of examDetails.sections) {
+      if (!sec.durationSeconds || sec.durationSeconds <= 0) {
         throw new AppError(
           400,
-          `Section timing conflict: Sum of section durations (${Math.round(
-            sumSectionSeconds / 60
-          )} mins) cannot exceed total paper duration (${Math.round(
-            examDetails.paperDurationSeconds / 60
-          )} mins).`,
-          'SECTION_TIMING_EXCEEDED'
+          `Section "${sec.title}" must have a duration specified. Every section must have a duration allocated.`,
+          'SECTION_DURATION_REQUIRED'
         );
       }
     }
 
-    // Timing Invariant Check 2: Sum of per-question time limits cannot exceed section duration
-    for (const sec of examDetails.sections) {
-      const timedQuestions = sec.questions.filter((q) => q.timeLimitSeconds && q.timeLimitSeconds > 0);
-      if (timedQuestions.length > 0 && sec.durationSeconds) {
-        const sumQSeconds = timedQuestions.reduce((sum, q) => sum + q.timeLimitSeconds!, 0);
+    // Sum of all section durations must strictly equal total paper duration (not less, not greater)
+    const sumSectionSeconds = examDetails.sections.reduce((sum, sec) => sum + (sec.durationSeconds || 0), 0);
+    if (sumSectionSeconds !== examDetails.paperDurationSeconds) {
+      throw new AppError(
+        400,
+        `Section timing mismatch: Sum of section durations (${Math.round(
+          sumSectionSeconds / 60
+        )} mins / ${sumSectionSeconds}s) must strictly equal total paper duration (${Math.round(
+          examDetails.paperDurationSeconds / 60
+        )} mins / ${examDetails.paperDurationSeconds}s).`,
+        'SECTION_TIMING_MISMATCH'
+      );
+    }
 
-        if (sumQSeconds > sec.durationSeconds) {
+    // 3. Validate Question Time Limits (Enforced across ALL timing modes)
+    if (examDetails.timingMode === 'QUESTION_TIMED') {
+      for (const sec of examDetails.sections) {
+        if (!sec.durationSeconds || sec.durationSeconds <= 0) {
           throw new AppError(
             400,
-            `Question timing conflict in "${sec.title}": Sum of question time limits (${sumQSeconds}s) exceeds section duration (${sec.durationSeconds}s).`,
-            'QUESTION_TIMING_EXCEEDED'
+            `Section "${sec.title}" must have a duration specified for Per-Question Timed mode.`,
+            'SECTION_DURATION_REQUIRED'
           );
         }
 
-        // Only enforce exact sum match if timingMode is explicitly QUESTION_TIMED and all questions are timed
-        if (
-          examDetails.timingMode === 'QUESTION_TIMED' &&
-          timedQuestions.length === sec.questions.length &&
-          sumQSeconds !== sec.durationSeconds
-        ) {
+        // 2. Every question in the section must have an explicit time limit > 0
+        for (const eq of sec.questions) {
+          if (!eq.timeLimitSeconds || eq.timeLimitSeconds <= 0) {
+            throw new AppError(
+              400,
+              `Every question in section "${sec.title}" must have a time limit specified for Per-Question Timed mode.`,
+              'QUESTION_TIMELIMIT_REQUIRED'
+            );
+          }
+        }
+
+        // 3. Sum of question time limits must strictly equal section duration
+        const sumQSeconds = sec.questions.reduce((sum, q) => sum + (q.timeLimitSeconds || 0), 0);
+        if (sumQSeconds !== sec.durationSeconds) {
           throw new AppError(
             400,
-            `Question timing mismatch in "${sec.title}": For Per-Question timing mode, sum of question time limits (${sumQSeconds}s) must equal section duration (${sec.durationSeconds}s).`,
+            `Question timing mismatch in "${sec.title}": Sum of question time limits (${sumQSeconds}s) must equal section duration (${sec.durationSeconds}s).`,
             'QUESTION_TIMING_MISMATCH'
           );
+        }
+      }
+    } else {
+      // In other modes (WHOLE_PAPER, SECTION_TIMED, MIXED):
+      // If the teacher has configured question time limits in a section, the sum of question time limits must strictly equal that section's duration
+      for (const sec of examDetails.sections) {
+        const timedQuestions = sec.questions.filter((q) => q.timeLimitSeconds && q.timeLimitSeconds > 0);
+        if (timedQuestions.length > 0) {
+          if (timedQuestions.length !== sec.questions.length) {
+            throw new AppError(
+              400,
+              `Question timing incomplete in section "${sec.title}": Because question time limits are configured, every question in this section must have a time limit.`,
+              'QUESTION_TIMELIMIT_REQUIRED'
+            );
+          }
+
+          const sumQSeconds = timedQuestions.reduce((sum, q) => sum + q.timeLimitSeconds!, 0);
+          if (sumQSeconds !== sec.durationSeconds) {
+            throw new AppError(
+              400,
+              `Question timing mismatch in section "${sec.title}": Sum of question time limits (${sumQSeconds}s / ${Math.round(
+                sumQSeconds / 60
+              )}m) must strictly equal section duration (${sec.durationSeconds}s / ${Math.round(
+                sec.durationSeconds! / 60
+              )}m).`,
+              'QUESTION_TIMING_MISMATCH'
+            );
+          }
         }
       }
     }
@@ -425,12 +587,13 @@ export class ExamBuilderService {
         },
       });
 
-      // Update top-level Exam status
+      // Update top-level Exam status and ensure closesAt matches exact duration
       const publishedExam = await tx.exam.update({
         where: { id: examId },
         data: {
           status: 'PUBLISHED',
           publishedAt: now,
+          closesAt: new Date(new Date(examDetails.startsAt).getTime() + examDetails.paperDurationSeconds * 1000),
         },
       });
 
@@ -468,14 +631,62 @@ export class ExamBuilderService {
     }
 
     const examData: any = {};
-    if (data.title) examData.title = data.title.trim();
+    if (data.title) {
+      const trimmedTitle = data.title.trim();
+      const duplicateExam = await prisma.exam.findFirst({
+        where: {
+          ownerId: teacherUserId,
+          id: { not: examId },
+          title: { equals: trimmedTitle, mode: 'insensitive' },
+          status: { in: ['DRAFT', 'PUBLISHED'] },
+        },
+      });
+
+      if (duplicateExam) {
+        throw new AppError(
+          409,
+          `Another exam titled "${trimmedTitle}" already exists. Please choose a unique title.`,
+          'DUPLICATE_EXAM_TITLE'
+        );
+      }
+      examData.title = trimmedTitle;
+    }
     if (data.description !== undefined) examData.description = data.description?.trim();
     if (data.accessPolicy) examData.accessPolicy = data.accessPolicy;
     if (data.capacity !== undefined) examData.capacity = data.capacity;
+    if (data.lateEntryGraceMinutes !== undefined) examData.lateEntryGraceMinutes = data.lateEntryGraceMinutes;
     if (data.registrationOpensAt) examData.registrationOpensAt = new Date(data.registrationOpensAt);
     if (data.registrationClosesAt) examData.registrationClosesAt = new Date(data.registrationClosesAt);
-    if (data.startsAt) examData.startsAt = new Date(data.startsAt);
-    if (data.closesAt) examData.closesAt = new Date(data.closesAt);
+
+    const effectiveDurationSeconds = data.paperDurationSeconds ?? examDetails.paperDurationSeconds ?? 7200;
+
+    if (data.paperDurationSeconds) {
+      const currentSections = examDetails.sections || [];
+      const sumSections = currentSections.reduce((sum, s) => sum + (s.durationSeconds || 0), 0);
+      if (sumSections > data.paperDurationSeconds) {
+        throw new AppError(
+          400,
+          `Cannot reduce paper duration to ${Math.round(
+            data.paperDurationSeconds / 60
+          )} mins: Existing section durations sum to ${Math.round(sumSections / 60)} mins. Adjust section durations first.`,
+          'PAPER_DURATION_LESS_THAN_SECTIONS'
+        );
+      }
+    }
+
+    const effectiveStartsAt = data.startsAt
+      ? new Date(data.startsAt)
+      : examDetails.startsAt
+      ? new Date(examDetails.startsAt)
+      : new Date();
+
+    // Enforce closesAt strictly = startsAt + paperDurationSeconds
+    if (data.startsAt || data.paperDurationSeconds) {
+      examData.startsAt = effectiveStartsAt;
+      examData.closesAt = new Date(effectiveStartsAt.getTime() + effectiveDurationSeconds * 1000);
+    } else if (data.closesAt) {
+      examData.closesAt = new Date(data.closesAt);
+    }
 
     const updatedExam = await prisma.exam.update({
       where: { id: examId },
@@ -519,12 +730,77 @@ export class ExamBuilderService {
       throw new AppError(400, 'Cannot modify section on a published exam', 'EXAM_ALREADY_PUBLISHED');
     }
 
+    let finalTitle = section.title;
+    if (data.title !== undefined) {
+      const trimmedTitle = data.title.trim();
+      if (!trimmedTitle) {
+        throw new AppError(400, 'Section title is required and cannot be empty.', 'INVALID_SECTION_TITLE');
+      }
+
+      const existingSameTitle = await prisma.examSection.findFirst({
+        where: {
+          revisionId: section.revisionId,
+          id: { not: sectionId },
+          title: { equals: trimmedTitle, mode: 'insensitive' },
+        },
+      });
+
+      if (existingSameTitle) {
+        throw new AppError(
+          400,
+          `A section named "${trimmedTitle}" already exists in this examination. Each section must have a unique name.`,
+          'DUPLICATE_SECTION_TITLE'
+        );
+      }
+      finalTitle = trimmedTitle;
+    }
+
+    let finalDuration = section.durationSeconds;
+    if (data.durationSeconds !== undefined) {
+      if (data.durationSeconds !== null) {
+        if (data.durationSeconds <= 0) {
+          throw new AppError(400, 'Section duration must be greater than 0 seconds.', 'INVALID_SECTION_DURATION');
+        }
+
+        const paperDuration = section.revision.paperDurationSeconds;
+        if (data.durationSeconds > paperDuration) {
+          throw new AppError(
+            400,
+            `Section duration (${Math.round(data.durationSeconds / 60)} mins) cannot exceed total paper duration (${Math.round(
+              paperDuration / 60
+            )} mins).`,
+            'SECTION_DURATION_EXCEEDS_PAPER'
+          );
+        }
+
+        const otherSections = await prisma.examSection.findMany({
+          where: {
+            revisionId: section.revisionId,
+            id: { not: sectionId },
+          },
+          select: { durationSeconds: true },
+        });
+
+        const sumOthers = otherSections.reduce((sum, s) => sum + (s.durationSeconds || 0), 0);
+        if (sumOthers + data.durationSeconds > paperDuration) {
+          throw new AppError(
+            400,
+            `Cannot update section duration: Total allocated section time (${Math.round(
+              (sumOthers + data.durationSeconds) / 60
+            )} mins) would exceed total paper duration (${Math.round(paperDuration / 60)} mins).`,
+            'TOTAL_SECTION_TIME_EXCEEDS_PAPER'
+          );
+        }
+      }
+      finalDuration = data.durationSeconds;
+    }
+
     const updated = await prisma.examSection.update({
       where: { id: sectionId },
       data: {
-        title: data.title !== undefined ? data.title.trim() : section.title,
+        title: finalTitle,
         description: data.description !== undefined ? data.description?.trim() : section.description,
-        durationSeconds: data.durationSeconds !== undefined ? data.durationSeconds : section.durationSeconds,
+        durationSeconds: finalDuration,
       },
     });
 
@@ -578,6 +854,39 @@ export class ExamBuilderService {
 
     if (eq.section.revision.exam.status === 'PUBLISHED') {
       throw new AppError(400, 'Cannot update questions on a published exam', 'EXAM_ALREADY_PUBLISHED');
+    }
+
+    if (data.timeLimitSeconds !== undefined && data.timeLimitSeconds !== null) {
+      if (data.timeLimitSeconds <= 0) {
+        throw new AppError(400, 'Question time limit must be greater than 0 seconds.', 'INVALID_QUESTION_TIMELIMIT');
+      }
+
+      if (eq.section.durationSeconds && data.timeLimitSeconds > eq.section.durationSeconds) {
+        throw new AppError(
+          400,
+          `Question time limit (${data.timeLimitSeconds}s) cannot exceed section duration (${eq.section.durationSeconds}s).`,
+          'QUESTION_TIMELIMIT_EXCEEDS_SECTION'
+        );
+      }
+
+      if (eq.section.durationSeconds) {
+        const otherQuestions = await prisma.examQuestion.findMany({
+          where: {
+            sectionId: eq.sectionId,
+            id: { not: examQuestionId },
+          },
+          select: { timeLimitSeconds: true },
+        });
+
+        const sumOthers = otherQuestions.reduce((sum, q) => sum + (q.timeLimitSeconds || 0), 0);
+        if (sumOthers + data.timeLimitSeconds > eq.section.durationSeconds) {
+          throw new AppError(
+            400,
+            `Cannot set question time limit: Total question time limits in this section (${sumOthers + data.timeLimitSeconds}s) would exceed section duration (${eq.section.durationSeconds}s).`,
+            'TOTAL_QUESTION_TIME_EXCEEDS_SECTION'
+          );
+        }
+      }
     }
 
     const updated = await prisma.examQuestion.update({

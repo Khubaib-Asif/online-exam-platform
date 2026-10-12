@@ -1,21 +1,37 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { AppLayout } from "@components/layout/AppLayout";
 import { Badge } from "@components/ui/Badge";
 import { Button } from "@components/ui/Button";
 import { Input } from "@components/ui/Input";
 import {
-  HelpCircle,
   Save,
   ArrowLeft,
   Plus,
   Trash2,
   CheckCircle2,
-  Eye,
   ShieldCheck,
   AlertCircle,
+  RefreshCw,
 } from "lucide-react";
-import { useCreateQuestionMutation, useUpdateQuestionMutation, useGetQuestionBanksQuery } from "@/redux/services/questionBankApi";
+import {
+  useCreateQuestionMutation,
+  useUpdateQuestionMutation,
+  useGetQuestionBanksQuery,
+  useGetQuestionDetailsQuery,
+} from "@/redux/services/questionBankApi";
+
+const DEFAULT_MCQ_OPTIONS = [
+  { id: "opt-1", text: "", isCorrect: true },
+  { id: "opt-2", text: "", isCorrect: false },
+  { id: "opt-3", text: "", isCorrect: false },
+  { id: "opt-4", text: "", isCorrect: false },
+];
+
+const DEFAULT_TF_OPTIONS = [
+  { id: "tf-true", text: "True", isCorrect: true },
+  { id: "tf-false", text: "False", isCorrect: false },
+];
 
 export const QuestionEditorScreen: React.FC = () => {
   const { questionId } = useParams<{ questionId?: string }>();
@@ -25,91 +41,110 @@ export const QuestionEditorScreen: React.FC = () => {
   const { data: banksData } = useGetQuestionBanksQuery();
   const defaultBankId = banksData?.[0]?.id || "qb-default";
 
+  const { data: questionDetails, isLoading: isDetailsLoading } = useGetQuestionDetailsQuery(
+    questionId || "",
+    { skip: !isEditing || !questionId }
+  );
+
   const [createQuestion, { isLoading: isCreating }] = useCreateQuestionMutation();
   const [updateQuestion, { isLoading: isUpdating }] = useUpdateQuestionMutation();
 
-  const [type, setType] = useState<
-    "MCQ" | "MSQ" | "TRUE_FALSE" | "SHORT" | "LONG"
-  >("MCQ");
-  const [prompt, setPrompt] = useState(
-    isEditing
-      ? "In Paxos consensus, what is the minimum quorum size required for a cluster of N nodes?"
-      : ""
-  );
-  const [marks, setMarks] = useState<number>(4);
-  const [tags, setTags] = useState<string>("Distributed Systems, Consensus");
-  const [options, setOptions] = useState([
-    { id: "opt-1", text: "N / 2", isCorrect: false },
-    { id: "opt-2", text: "floor(N / 2) + 1", isCorrect: true },
-    { id: "opt-3", text: "N - 1", isCorrect: false },
-    { id: "opt-4", text: "2 * N + 1", isCorrect: false },
-  ]);
-  const [isSaving, setIsSaving] = useState(false);
+  const [type, setType] = useState<"MCQ" | "MSQ" | "TRUE_FALSE" | "SHORT" | "LONG">("MCQ");
+  const [prompt, setPrompt] = useState("");
+  const [marks, setMarks] = useState<number>(1);
+  const [tags, setTags] = useState<string>("");
+  const [options, setOptions] = useState(DEFAULT_MCQ_OPTIONS);
+  const [keywords, setKeywords] = useState("");
+  const [rubricReference, setRubricReference] = useState("");
+
+  const [formError, setFormError] = useState<string | null>(null);
   const [isSaved, setIsSaved] = useState(false);
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const tagList = tags.split(",").map((t) => t.trim()).filter(Boolean);
-    const keywordList = keywords.split(",").map((k) => k.trim()).filter(Boolean);
+  // Populate data when editing
+  useEffect(() => {
+    if (isEditing && questionDetails && questionDetails.versions?.length > 0) {
+      const latest = questionDetails.versions[0];
+      setType(latest.type || "MCQ");
+      setPrompt(latest.content || "");
+      setMarks(latest.marks || 1);
+      setTags(Array.isArray(latest.tags) ? latest.tags.join(", ") : "");
+      setKeywords(Array.isArray(latest.keywords) ? latest.keywords.join(", ") : "");
+      setRubricReference(latest.rubric || "");
 
-    let mappedType: "MCQ" | "MSQ" | "TRUE_FALSE" | "SHORT" | "LONG" = type as any;
-    if ((type as string) === "SHORT_ANSWER") mappedType = "SHORT";
-    if ((type as string) === "LONG_ANSWER") mappedType = "LONG";
+      if (latest.type === "TRUE_FALSE") {
+        const correctChoice = latest.answerKey === "False" ? "False" : "True";
+        setOptions([
+          { id: "tf-true", text: "True", isCorrect: correctChoice === "True" },
+          { id: "tf-false", text: "False", isCorrect: correctChoice === "False" },
+        ]);
+      } else if (latest.type === "MCQ" || latest.type === "MSQ") {
+        if (latest.options && latest.options.length > 0) {
+          const rawAnswerKey = latest.answerKey;
+          const correctKeys: string[] = Array.isArray(rawAnswerKey)
+            ? rawAnswerKey
+            : rawAnswerKey
+            ? [rawAnswerKey]
+            : [];
 
-    const payload: any = {
-      type: mappedType,
-      content: prompt,
-      marks,
-      tags: tagList,
-    };
-
-    if (mappedType === "MCQ") {
-      const optionTexts = options.map((o) => o.text);
-      const correctOption = options.find((o) => o.isCorrect)?.text || optionTexts[0];
-      payload.options = optionTexts;
-      payload.answerKey = correctOption;
-    } else if (mappedType === "MSQ") {
-      const optionTexts = options.map((o) => o.text);
-      const correctOptions = options.filter((o) => o.isCorrect).map((o) => o.text);
-      payload.options = optionTexts;
-      payload.answerKey = correctOptions.length > 0 ? correctOptions : [optionTexts[0]];
-    } else if (mappedType === "TRUE_FALSE") {
-      const selected = options.find((o) => o.isCorrect)?.text;
-      payload.options = ["True", "False"];
-      payload.answerKey = selected === "False" ? "False" : "True";
-    } else if (mappedType === "SHORT") {
-      payload.keywords = keywordList;
-      payload.rubric = rubricReference;
-    } else if (mappedType === "LONG") {
-      payload.rubric = rubricReference;
-    }
-
-    try {
-      if (isEditing && questionId) {
-        await updateQuestion({ questionId, question: payload }).unwrap();
-      } else {
-        await createQuestion({ bankId: defaultBankId, question: payload }).unwrap();
+          setOptions(
+            latest.options.map((optText, index) => ({
+              id: `opt-${index + 1}`,
+              text: optText,
+              isCorrect: correctKeys.includes(optText),
+            }))
+          );
+        } else {
+          setOptions(DEFAULT_MCQ_OPTIONS);
+        }
       }
-      setIsSaved(true);
-      setTimeout(() => navigate("/questions"), 1000);
-    } catch (err) {
-      console.error("Save question error:", err);
+    }
+  }, [isEditing, questionDetails]);
+
+  const handleTypeChange = (newType: "MCQ" | "MSQ" | "TRUE_FALSE" | "SHORT" | "LONG") => {
+    if (newType === type) return;
+    setFormError(null);
+    setType(newType);
+
+    if (newType === "TRUE_FALSE") {
+      setOptions(DEFAULT_TF_OPTIONS);
+    } else if (newType === "MCQ" || newType === "MSQ") {
+      // If coming from TRUE_FALSE, reset to standard 4 empty options
+      const isFromTF = options.length === 2 && options[0].text === "True" && options[1].text === "False";
+      if (isFromTF || options.length < 2) {
+        setOptions(DEFAULT_MCQ_OPTIONS);
+      } else if (newType === "MCQ") {
+        // If switching from MSQ to MCQ, ensure only 1 option is marked correct
+        const hasCorrect = options.some((o) => o.isCorrect);
+        if (!hasCorrect) {
+          setOptions(options.map((o, idx) => ({ ...o, isCorrect: idx === 0 })));
+        } else {
+          let foundFirst = false;
+          setOptions(
+            options.map((o) => {
+              if (o.isCorrect && !foundFirst) {
+                foundFirst = true;
+                return { ...o, isCorrect: true };
+              }
+              return { ...o, isCorrect: false };
+            })
+          );
+        }
+      }
     }
   };
 
-  // Subjective rubric fields
-  const [keywords, setKeywords] = useState("majority, quorum, consensus, phase 1b");
-  const [rubricReference, setRubricReference] = useState(
-    "Paxos requires a majority quorum (floor(N/2)+1) to guarantee overlapping quorums across phase 1 and phase 2."
-  );
-
   const handleAddOption = () => {
-    const newId = `opt-${options.length + 1}`;
+    const newId = `opt-${Date.now()}-${options.length + 1}`;
     setOptions([...options, { id: newId, text: "", isCorrect: false }]);
   };
 
   const handleRemoveOption = (id: string) => {
-    setOptions(options.filter((o) => o.id !== id));
+    if (options.length <= 2) return;
+    const remaining = options.filter((o) => o.id !== id);
+    if (type === "MCQ" && !remaining.some((o) => o.isCorrect) && remaining.length > 0) {
+      remaining[0].isCorrect = true;
+    }
+    setOptions(remaining);
   };
 
   const handleOptionChange = (id: string, text: string) => {
@@ -126,11 +161,105 @@ export const QuestionEditorScreen: React.FC = () => {
     }
   };
 
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) {
+      setFormError("Question prompt text is required.");
+      return;
+    }
+
+    if (!marks || marks <= 0) {
+      setFormError("Marks must be a positive number greater than 0.");
+      return;
+    }
+
+    const tagList = tags
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+
+    const keywordList = keywords
+      .split(",")
+      .map((k) => k.trim())
+      .filter(Boolean);
+
+    const payload: any = {
+      type,
+      content: trimmedPrompt,
+      marks: Number(marks),
+      tags: tagList,
+    };
+
+    if (type === "MCQ") {
+      if (options.length < 2) {
+        setFormError("MCQ questions require at least 2 options.");
+        return;
+      }
+      const emptyOptIndex = options.findIndex((o) => !o.text.trim());
+      if (emptyOptIndex !== -1) {
+        setFormError(`Option ${String.fromCharCode(65 + emptyOptIndex)} text cannot be blank.`);
+        return;
+      }
+      const correctOpt = options.find((o) => o.isCorrect);
+      if (!correctOpt) {
+        setFormError("Please select 1 correct answer option.");
+        return;
+      }
+      payload.options = options.map((o) => o.text.trim());
+      payload.answerKey = correctOpt.text.trim();
+    } else if (type === "MSQ") {
+      if (options.length < 2) {
+        setFormError("MSQ questions require at least 2 options.");
+        return;
+      }
+      const emptyOptIndex = options.findIndex((o) => !o.text.trim());
+      if (emptyOptIndex !== -1) {
+        setFormError(`Option ${String.fromCharCode(65 + emptyOptIndex)} text cannot be blank.`);
+        return;
+      }
+      const correctOpts = options.filter((o) => o.isCorrect);
+      if (correctOpts.length === 0) {
+        setFormError("Please select at least 1 correct answer option for MSQ.");
+        return;
+      }
+      payload.options = options.map((o) => o.text.trim());
+      payload.answerKey = correctOpts.map((o) => o.text.trim());
+    } else if (type === "TRUE_FALSE") {
+      const selected = options.find((o) => o.isCorrect)?.text;
+      payload.options = ["True", "False"];
+      payload.answerKey = selected === "False" ? "False" : "True";
+    } else if (type === "SHORT") {
+      payload.keywords = keywordList;
+      payload.rubric = rubricReference.trim() || null;
+    } else if (type === "LONG") {
+      payload.rubric = rubricReference.trim() || null;
+    }
+
+    try {
+      if (isEditing && questionId) {
+        await updateQuestion({ questionId, question: payload }).unwrap();
+      } else {
+        await createQuestion({ bankId: defaultBankId, question: payload }).unwrap();
+      }
+      setIsSaved(true);
+      setTimeout(() => navigate("/question-bank"), 900);
+    } catch (err: any) {
+      const msg = err?.data?.message || err?.message || "Failed to save question.";
+      setFormError(msg);
+    }
+  };
+
+  const isSaving = isCreating || isUpdating;
+
   return (
     <AppLayout pageTitle={isEditing ? `Edit Question — ${questionId}` : "Create Question"}>
       <div className="max-w-4xl mx-auto flex flex-col gap-6">
         <div>
           <button
+            type="button"
             onClick={() => navigate("/question-bank")}
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
           >
@@ -171,6 +300,13 @@ export const QuestionEditorScreen: React.FC = () => {
             </div>
           )}
 
+          {formError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-md text-xs text-red-800 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
           {/* Type Selector Tabs */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-2">
@@ -189,22 +325,7 @@ export const QuestionEditorScreen: React.FC = () => {
                 <button
                   key={t}
                   type="button"
-                  onClick={() => {
-                    setType(t);
-                    if (t === "TRUE_FALSE") {
-                      setOptions([
-                        { id: "tf-true", text: "True", isCorrect: true },
-                        { id: "tf-false", text: "False", isCorrect: false },
-                      ]);
-                    } else if (t === "MCQ" || t === "MSQ") {
-                      if (options.length < 2 || options[0].text === "True") {
-                        setOptions([
-                          { id: "opt-1", text: "", isCorrect: true },
-                          { id: "opt-2", text: "", isCorrect: false },
-                        ]);
-                      }
-                    }
-                  }}
+                  onClick={() => handleTypeChange(t)}
                   className={`px-3 py-2 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
                     type === t
                       ? "bg-slate-900 text-white shadow-2xs"

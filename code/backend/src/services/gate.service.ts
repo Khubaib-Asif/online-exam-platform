@@ -123,6 +123,50 @@ export class GateService {
       );
     }
 
+    // Check if candidate has already submitted this exam
+    const existingSession = await prisma.examSession.findFirst({
+      where: { examId, userId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (
+      existingSession &&
+      ['SUBMITTED', 'AUTO_SUBMITTED', 'GRADING', 'GRADED', 'PUBLISHED', 'TERMINATED'].includes(existingSession.status)
+    ) {
+      throw new AppError(
+        400,
+        'You have already completed and submitted this examination. Re-entry is not permitted.',
+        'EXAM_ALREADY_SUBMITTED'
+      );
+    }
+
+    // Enforce Exam Start & End Timing Window
+    const now = new Date();
+    if (exam.startsAt && now < exam.startsAt) {
+      throw new AppError(
+        400,
+        `The examination has not started yet. Starts at ${exam.startsAt.toLocaleString()}`,
+        'EXAM_NOT_STARTED'
+      );
+    }
+
+    if (exam.closesAt && now > exam.closesAt) {
+      throw new AppError(400, 'The examination window has closed.', 'EXAM_CLOSED');
+    }
+
+    // Enforce Late Entry Grace Period for new sessions
+    const isReconnecting = existingSession && (existingSession.status === 'ACTIVE' || existingSession.status === 'PAUSED_RECONNECT');
+    const graceMinutes = exam.lateEntryGraceMinutes ?? 15;
+    const lateCutoffMs = exam.startsAt.getTime() + graceMinutes * 60 * 1000;
+
+    if (!isReconnecting && now.getTime() > lateCutoffMs) {
+      throw new AppError(
+        400,
+        `Late entry is closed. The allowed entry window of ${graceMinutes} minutes after exam start has elapsed.`,
+        'LATE_ENTRY_DENIED'
+      );
+    }
+
     // Retrieve candidate's active registered device if available
     const activeDevice = await prisma.device.findFirst({
       where: { userId, status: 'ACTIVE' },

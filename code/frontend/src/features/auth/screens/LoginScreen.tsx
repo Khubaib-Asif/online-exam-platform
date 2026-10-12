@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useLocation } from "react-router-dom";
 import { CredentialPanel } from "@components/credential-panel/CredentialPanel";
 import { setAuth } from "@redux/slices/authSlice";
 import { useAppDispatch } from "@redux/hooks";
@@ -11,6 +11,7 @@ import { useLoginMutation } from "@/redux/services/authApi";
 
 export const LoginScreen: React.FC = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [login] = useLoginMutation();
@@ -48,7 +49,8 @@ export const LoginScreen: React.FC = () => {
                 }));
                 localStorage.setItem("accessToken", response.accessToken);
                 localStorage.setItem("user", JSON.stringify(response.user));
-                navigate("/dashboard");
+                const destination = (location.state as any)?.from || "/dashboard";
+                navigate(destination);
             })
             .catch((err) => {
                 console.error("Login error:", err);
@@ -116,7 +118,7 @@ export const LoginScreen: React.FC = () => {
                         </Link>
                     </div>
 
-                    {/* Quick Demo Role Selector */}
+                    {/* Quick Demo Role Selector
                     <div className="w-full text-left bg-slate-50 border border-slate-200 rounded-md p-3 my-1">
                         <label className="text-[11px] font-semibold text-slate-600 block mb-1.5 uppercase tracking-wider">
                             Role Switcher (Demo Context):
@@ -136,7 +138,7 @@ export const LoginScreen: React.FC = () => {
                                 </button>
                             ))}
                         </div>
-                    </div>
+                    </div> */}
 
                     <Button
                         type="submit"

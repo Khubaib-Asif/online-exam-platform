@@ -18,6 +18,12 @@ import {
 } from "lucide-react";
 import { useGetTeacherExamsQuery, useCreateExamMutation } from "@/redux/services/examBuilderApi";
 
+import {
+  toLocalDatetimeInput,
+  calculateClosesAt,
+  fromLocalDatetimeInput,
+} from "@/utils/dateTime";
+
 export interface TeacherExamItem {
   id: string;
   title: string;
@@ -47,7 +53,36 @@ export const ExamListScreen: React.FC = () => {
   const [description, setDescription] = useState("");
   const [accessPolicy, setAccessPolicy] = useState<"PUBLIC" | "INVITATION_ONLY" | "APPROVAL_REQUIRED">("INVITATION_ONLY");
   const [timingMode, setTimingMode] = useState<"WHOLE_PAPER" | "SECTION_TIMED" | "QUESTION_TIMED" | "MIXED">("WHOLE_PAPER");
-  const [durationMinutes, setDurationMinutes] = useState<number>(120);
+  const [durationMinutes, setDurationMinutes] = useState<number>(30);
+  const [regClosesAt, setRegClosesAt] = useState(() => {
+    const d = new Date(Date.now() + 86400000 * 3);
+    d.setHours(23, 59, 0, 0);
+    return toLocalDatetimeInput(d);
+  });
+  const [startsAt, setStartsAt] = useState(() => {
+    const d = new Date(Date.now() + 86400000 * 4);
+    d.setHours(9, 0, 0, 0);
+    return toLocalDatetimeInput(d);
+  });
+  const [closesAt, setClosesAt] = useState(() => {
+    const d = new Date(Date.now() + 86400000 * 4);
+    d.setHours(9, 0, 0, 0);
+    return calculateClosesAt(toLocalDatetimeInput(d), 30);
+  });
+
+  const handleStartsAtChange = (newStartsAt: string) => {
+    setStartsAt(newStartsAt);
+    if (newStartsAt && durationMinutes > 0) {
+      setClosesAt(calculateClosesAt(newStartsAt, durationMinutes));
+    }
+  };
+
+  const handleDurationMinutesChange = (newDuration: number) => {
+    setDurationMinutes(newDuration);
+    if (startsAt && newDuration > 0) {
+      setClosesAt(calculateClosesAt(startsAt, newDuration));
+    }
+  };
 
   const handleCreateExam = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,6 +95,9 @@ export const ExamListScreen: React.FC = () => {
         accessPolicy,
         timingMode,
         paperDurationSeconds: durationMinutes * 60,
+        registrationClosesAt: fromLocalDatetimeInput(regClosesAt),
+        startsAt: fromLocalDatetimeInput(startsAt),
+        closesAt: fromLocalDatetimeInput(closesAt),
       }).unwrap();
 
       const createdId = res.data?.id || res.id;
@@ -68,9 +106,9 @@ export const ExamListScreen: React.FC = () => {
       setDescription("");
       refetchExams();
       navigate(`/builder/${createdId}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Create exam error:", err);
-      alert("Failed to create draft exam. Please check input values.");
+      alert(err.data?.message || err.message || "Failed to create draft exam. Please check input values.");
     }
   };
 
@@ -197,8 +235,32 @@ export const ExamListScreen: React.FC = () => {
               min={15}
               max={600}
               value={durationMinutes}
-              onChange={(e) => setDurationMinutes(Number(e.target.value))}
+              onChange={(e) => handleDurationMinutesChange(Number(e.target.value))}
             />
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 border-t border-slate-100 pt-3">
+              <Input
+                label="Registration Deadline"
+                type="datetime-local"
+                value={regClosesAt}
+                onChange={(e) => setRegClosesAt(e.target.value)}
+                helperText="When registration requests close"
+              />
+              <Input
+                label="Exam Starts At"
+                type="datetime-local"
+                value={startsAt}
+                onChange={(e) => handleStartsAtChange(e.target.value)}
+                helperText="Fixed exam launch date & time"
+              />
+              <Input
+                label="Exam Ends At (Auto-calculated)"
+                type="datetime-local"
+                disabled={true}
+                value={closesAt}
+                helperText={`Start Time + ${durationMinutes} mins`}
+              />
+            </div>
 
             <div className="flex justify-end gap-2 mt-3 border-t border-slate-100 pt-3">
               <Button type="button" variant="ghost" onClick={() => setIsModalOpen(false)}>
@@ -246,7 +308,7 @@ export const ExamListScreen: React.FC = () => {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Title & ID</TableHead>
+                <TableHead>Exam Title</TableHead>
                 <TableHead>Revision</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Timing Mode</TableHead>
@@ -267,8 +329,8 @@ export const ExamListScreen: React.FC = () => {
                     <TableCell>
                       <div>
                         <div className="font-semibold text-slate-900 text-xs">{exam.title}</div>
-                        <div className="text-[11px] text-slate-400 font-mono">
-                          ID: {exam.id} • {exam.totalQuestions} Questions
+                        <div className="text-[11px] text-slate-400 font-medium">
+                          {exam.totalQuestions} Questions
                         </div>
                       </div>
                     </TableCell>

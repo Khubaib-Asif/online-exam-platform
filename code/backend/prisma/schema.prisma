@@ -307,6 +307,7 @@ model Exam {
   registrationClosesAt DateTime
   startsAt             DateTime
   closesAt             DateTime
+  lateEntryGraceMinutes Int         @default(15)
   publishedAt          DateTime?
   closedAt             DateTime?
   createdAt            DateTime     @default(now())
@@ -377,20 +378,23 @@ model ExamQuestion {
 }
 
 model ExamInvitation {
-  id              String   @id @default(uuid())
+  id              String    @id @default(uuid())
   examId          String
-  tokenHash       String   @unique @db.VarChar(64)
-  recipientEmail  String?  @db.VarChar(254)
+  tokenHash       String    @unique @db.VarChar(64)
+  code            String?   @db.VarChar(64)
+  recipientEmail  String?   @db.VarChar(254)
   recipientUserId String?
   expiresAt       DateTime
-  maxUses         Int      @default(1)
-  usedCount       Int      @default(0)
-  createdAt       DateTime @default(now())
+  maxUses         Int       @default(1)
+  usedCount       Int       @default(0)
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
 
   exam          Exam               @relation(fields: [examId], references: [id], onDelete: Restrict)
   registrations ExamRegistration[]
 
   @@index([examId, expiresAt])
+  @@index([code])
 }
 
 model ExamRegistration {

@@ -107,7 +107,6 @@ export const ExamPreviewScreen: React.FC = () => {
                   <div>
                     <div className="flex items-center gap-2 mb-2">
                       <Badge variant="outline">{currentQuestion.type}</Badge>
-                      <span className="text-xs text-slate-400 font-mono">ID: {currentQuestion.id}</span>
                     </div>
                     <h3 className="text-base font-semibold text-slate-900 leading-relaxed">
                       {currentQuestion.prompt}

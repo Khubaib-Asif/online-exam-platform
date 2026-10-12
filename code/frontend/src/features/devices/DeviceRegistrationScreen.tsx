@@ -43,7 +43,7 @@ export const DeviceRegistrationScreen: React.FC = () => {
         try {
           const info = await nativeBridge.getDeviceInfo();
           if (info?.hostname) {
-            deviceLabel = info.hostname; // Real computer name, e.g. "LAPTOP-3MUM752P"
+            deviceLabel = info.hostname; 
           }
           if (info?.platform) {
             devicePlatform = info.platform;
@@ -140,7 +140,7 @@ export const DeviceRegistrationScreen: React.FC = () => {
             <Badge variant="info" className="mb-2">Electron Native Hardware Binding</Badge>
             <h1 className="text-xl font-bold text-slate-900">Device Hardware Registration</h1>
             <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-              Extracting cryptographic hardware signatures directly from the host operating system.
+              Extracting cryptographic hardware signatures.
             </p>
           </div>
 
@@ -214,7 +214,7 @@ export const DeviceRegistrationScreen: React.FC = () => {
 
           <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5 text-xs text-slate-400">
             <ShieldCheck className="w-3.5 h-3.5 text-[#4C70A6]" />
-            <span>Hardware fingerprinting runs via Electron main process APIs, protecting against spoofing.</span>
+            <span>Hardware fingerprinting runs via Electron, protecting against spoofing.</span>
           </div>
         </div>
       </div>
