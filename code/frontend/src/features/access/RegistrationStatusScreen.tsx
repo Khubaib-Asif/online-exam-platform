@@ -16,6 +16,7 @@ import {
   useGetExamDetailsQuery,
   useGetStudentRegistrationsQuery,
 } from "@/redux/services/registrationApi";
+import { formatDateTime } from "@/utils/dateTime";
 
 export const RegistrationStatusScreen: React.FC = () => {
   const { examId } = useParams<{ examId: string }>();
@@ -30,6 +31,9 @@ export const RegistrationStatusScreen: React.FC = () => {
   const teacherName = activeReg?.teacherName || apiDetails?.teacherName || "Instructor";
   const examTitle = activeReg?.examTitle || apiDetails?.title || "Examination";
   const rawStatus = activeReg?.status || apiDetails?.registrationState || "REQUESTED";
+  const startsAt = activeReg?.startsAt || apiDetails?.startsAt;
+  const closesAt = activeReg?.closesAt || apiDetails?.closesAt;
+  const regClosesAt = activeReg?.registrationClosesAt || apiDetails?.registrationClosesAt;
 
   const status: "REGISTERED" | "REQUEST_PENDING" | "REJECTED" | "REVOKED" =
     rawStatus === "APPROVED"
@@ -41,10 +45,10 @@ export const RegistrationStatusScreen: React.FC = () => {
       : "REVOKED";
 
   const requestedAt = activeReg?.requestedAt
-    ? new Date(activeReg.requestedAt).toLocaleString()
+    ? formatDateTime(activeReg.requestedAt)
     : "Recently Submitted";
   const reviewedAt = activeReg?.approvedAt
-    ? new Date(activeReg.approvedAt).toLocaleString()
+    ? formatDateTime(activeReg.approvedAt)
     : null;
 
   const notes =
@@ -55,8 +59,18 @@ export const RegistrationStatusScreen: React.FC = () => {
       : "Registration request processed.";
 
   const renderStatusCard = () => {
+    const nowMs = Date.now();
+    const startsAtMs = startsAt ? new Date(startsAt).getTime() : 0;
+    const closesAtMs = closesAt ? new Date(closesAt).getTime() : 0;
+    const regCloseMs = regClosesAt ? new Date(regClosesAt).getTime() : 0;
+    const lateGraceMs = (activeReg?.lateEntryGraceMinutes ?? apiDetails?.lateEntryGraceMinutes ?? 15) * 60 * 1000;
+    const isBeforeStart = startsAtMs > 0 && nowMs < startsAtMs;
+    const isAfterClose = closesAtMs > 0 && nowMs > closesAtMs;
+    const isPastLateEntry = startsAtMs > 0 && nowMs > (startsAtMs + lateGraceMs);
+    const isRegistrationClosed = (regCloseMs > 0 && nowMs > regCloseMs) || (startsAtMs > 0 && nowMs > startsAtMs);
+
     switch (status) {
-      case "REGISTERED":
+      case "REGISTERED": {
         return (
           <div className="bg-emerald-50 border border-emerald-200 rounded-md p-6 text-left flex flex-col gap-3">
             <div className="flex items-center gap-2">
@@ -64,20 +78,42 @@ export const RegistrationStatusScreen: React.FC = () => {
               <h3 className="text-base font-bold text-emerald-900">Registration Approved</h3>
             </div>
             <p className="text-xs text-emerald-700">
-              Your registration request has been approved by {teacherName}. You are fully eligible to launch the exam when the scheduled window opens.
+              Your registration request has been approved by {teacherName}.{" "}
+              {isBeforeStart
+                ? `The exam opens on ${formatDateTime(startsAt)}.`
+                : isAfterClose
+                ? "The examination window has closed."
+                : isPastLateEntry
+                ? `The allowed entry window (${activeReg?.lateEntryGraceMinutes ?? apiDetails?.lateEntryGraceMinutes ?? 15} minutes after start) has elapsed.`
+                : "You are fully eligible to launch the exam."}
             </p>
             <div className="mt-2">
-              <Button
-                variant="primary"
-                size="md"
-                onClick={() => navigate(`/exam/${targetId}/launch`)}
-                icon={<Play className="w-4 h-4" />}
-              >
-                Proceed to Desktop Launch
-              </Button>
+              {!isBeforeStart && !isAfterClose && !isPastLateEntry ? (
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={() => navigate(`/exam/${targetId}/launch`)}
+                  icon={<Play className="w-4 h-4" />}
+                >
+                  Proceed to Desktop Launch
+                </Button>
+              ) : isBeforeStart ? (
+                <span className="text-xs font-mono text-amber-800 bg-amber-100/70 border border-amber-300 px-3 py-1.5 rounded inline-block font-semibold">
+                  Exam opens at {new Date(startsAt!).toLocaleString()}
+                </span>
+              ) : isPastLateEntry && !isAfterClose ? (
+                <span className="text-xs font-mono text-red-700 bg-red-100/70 border border-red-300 px-3 py-1.5 rounded inline-block font-semibold">
+                  Entry window closed (Allowed within {activeReg?.lateEntryGraceMinutes ?? apiDetails?.lateEntryGraceMinutes ?? 15}m of start)
+                </span>
+              ) : (
+                <span className="text-xs font-mono text-slate-600 bg-slate-100 border border-slate-300 px-3 py-1.5 rounded inline-block">
+                  Exam window has closed
+                </span>
+              )}
             </div>
           </div>
         );
+      }
       case "REJECTED":
         return (
           <div className="bg-red-50 border border-red-200 rounded-md p-6 text-left flex flex-col gap-3">
@@ -104,6 +140,19 @@ export const RegistrationStatusScreen: React.FC = () => {
         );
       case "REQUEST_PENDING":
       default:
+        if (isRegistrationClosed) {
+          return (
+            <div className="bg-slate-50 border border-slate-200 rounded-md p-6 text-left flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-6 h-6 text-amber-600" />
+                <h3 className="text-base font-bold text-slate-900">Registration Window Closed</h3>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                The registration window for this examination has passed. Your request was not approved before the deadline.
+              </p>
+            </div>
+          );
+        }
         return (
           <div className="bg-amber-50 border border-amber-200 rounded-md p-6 text-left flex flex-col gap-3">
             <div className="flex items-center gap-2">
@@ -156,6 +205,12 @@ export const RegistrationStatusScreen: React.FC = () => {
 
           {/* Timeline Details */}
           <div className="bg-slate-50 p-4 rounded-md border border-slate-200/70 text-xs text-slate-700 flex flex-col gap-2 font-mono">
+            {startsAt && (
+              <div className="flex justify-between">
+                <span className="text-slate-500">Exam Starts:</span>
+                <span className="font-semibold text-slate-900">{formatDateTime(startsAt)}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-slate-500">Requested Date:</span>
               <span className="font-semibold text-slate-900">{requestedAt}</span>
@@ -179,7 +234,7 @@ export const RegistrationStatusScreen: React.FC = () => {
           <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
             <span className="flex items-center gap-1.5">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              PostgreSQL verified registration status
+              Verified registration status
             </span>
             <Button
               variant="secondary"

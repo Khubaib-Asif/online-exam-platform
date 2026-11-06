@@ -181,7 +181,7 @@ const AuthGuard: React.FC<RouteGuardProps> = ({
     if (!redirectPath && !isEffectivelyAuthenticated) {
         if (location.pathname !== '/login') {
             redirectPath = '/login';
-            redirectStateLocal = { from: location.pathname };
+            redirectStateLocal = { from: location.pathname + location.search };
         }
     }
 
@@ -449,7 +449,9 @@ const router = createBrowserRouter([
     // M5 - Device & Security Gates
     { path: "/exam/:examId/launch", element: <AuthGuard allowedRoles={["STUDENT"]}><DownloadDesktopAppScreen /></AuthGuard> },
     { path: "/exam/:examId/entry", element: <AuthGuard allowedRoles={["STUDENT"]}><ElectronLockdownGuard><SessionEntryScreen /></ElectronLockdownGuard></AuthGuard> },
+    { path: "/session/entry", element: <AuthGuard allowedRoles={["STUDENT"]}><SessionEntryScreen /></AuthGuard> },
     { path: "/exam/:examId/gates", element: <AuthGuard allowedRoles={["STUDENT"]}><ElectronLockdownGuard><DeviceSecurityGatesScreen /></ElectronLockdownGuard></AuthGuard> },
+    { path: "/session/gates", element: <AuthGuard allowedRoles={["STUDENT"]}><DeviceSecurityGatesScreen /></AuthGuard> },
     { path: "/exam/:examId/gate-failed", element: <AuthGuard allowedRoles={["STUDENT"]}><ElectronLockdownGuard><GateFailureScreen /></ElectronLockdownGuard></AuthGuard> },
     { path: "/devices/register-action", element: <AuthGuard allowedRoles={["STUDENT"]}><ElectronLockdownGuard><DeviceRegistrationScreen /></ElectronLockdownGuard></AuthGuard> },
     { path: "/devices/revoke-confirm", element: <AuthGuard allowedRoles={["STUDENT"]}><RevokeDeviceConfirmationScreen /></AuthGuard> },

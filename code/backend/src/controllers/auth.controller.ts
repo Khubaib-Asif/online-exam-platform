@@ -36,6 +36,11 @@ const RedeemInvitationSchema = z.object({
     password: z.string().min(8),
 });
 
+const ChangePasswordSchema = z.object({
+    currentPassword: z.string().min(1),
+    newPassword: z.string().min(8),
+});
+
 export class AuthController {
     static async bootstrapOwner(req: Request, res: Response, next: NextFunction) {
         try {
@@ -56,6 +61,35 @@ export class AuthController {
                 validated.expiresInSeconds
             );
             res.status(201).json({ data: invitation, message: 'Teacher invitation created' });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    static async listTeacherInvitations(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const invitations = await AuthService.listTeacherInvitations();
+            res.json({ data: invitations });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    static async revokeTeacherInvitation(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const id = req.params.id as string;
+            const result = await AuthService.revokeTeacherInvitation(id);
+            res.json({ data: result.invitation, message: result.message });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    static async validateTeacherInvitation(req: Request, res: Response, next: NextFunction) {
+        try {
+            const token = req.query.token as string;
+            const result = await AuthService.validateTeacherInvitation(token || '');
+            res.json({ data: result });
         } catch (error) {
             next(error);
         }
@@ -165,6 +199,20 @@ export class AuthController {
             const { token, password } = req.body;
             const result = await AuthService.resetPassword(token, password);
             res.json({ data: result });
+        } catch (error) {
+            next(error);
+        }
+    }
+
+    static async changePassword(req: AuthRequest, res: Response, next: NextFunction) {
+        try {
+            const validated = ChangePasswordSchema.parse(req.body);
+            const result = await AuthService.changePassword(
+                req.user!.id,
+                validated.currentPassword,
+                validated.newPassword
+            );
+            res.json({ data: result, message: result.message });
         } catch (error) {
             next(error);
         }

@@ -108,26 +108,66 @@ export const ExamBuilderScreen: React.FC = () => {
   const [editEqTimeLimit, setEditEqTimeLimit] = useState<number | "">("");
   const [editEqMarksOverride, setEditEqMarksOverride] = useState<number | "">("");
 
+  const sections = apiDetails?.sections || [];
+  const totalQuestions = sections.reduce((sum, sec) => sum + sec.questions.length, 0);
+  const totalMarks = sections.reduce(
+    (sum, sec) => sum + sec.questions.reduce((qSum, q) => qSum + q.marks, 0),
+    0
+  );
+
+  const paperDurationSeconds = apiDetails?.paperDurationSeconds || (apiDetails?.durationMinutes ? apiDetails.durationMinutes * 60 : 7200);
+  const timingMode = apiDetails?.timingMode || "WHOLE_PAPER";
+  const sumAllocatedSectionSeconds = sections.reduce((sum, s) => sum + (s.durationSeconds || 0), 0);
+  const remainingUnallocatedSeconds = Math.max(0, paperDurationSeconds - sumAllocatedSectionSeconds);
+
   // 1. Add New Section
   const handleAddSection = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!targetId || !newSectionTitle.trim()) return;
+    const trimmedTitle = newSectionTitle.trim();
+    if (!targetId || !trimmedTitle) return;
+
+    // Check duplicate section title locally
+    if (sections.some((s) => s.title.trim().toLowerCase() === trimmedTitle.toLowerCase())) {
+      alert(`A section named "${trimmedTitle}" already exists in this examination. Each section must have a unique name.`);
+      return;
+    }
+
+    const durationNum = newSectionDurationSec !== "" ? Number(newSectionDurationSec) : undefined;
+    if (durationNum !== undefined) {
+      if (durationNum <= 0) {
+        alert("Section duration must be greater than 0 seconds.");
+        return;
+      }
+      if (durationNum > paperDurationSeconds) {
+        alert(`Section duration (${Math.round(durationNum / 60)} mins) cannot exceed total paper duration (${Math.round(paperDurationSeconds / 60)} mins).`);
+        return;
+      }
+      if (sumAllocatedSectionSeconds + durationNum > paperDurationSeconds) {
+        alert(
+          `Total allocated section time (${Math.round(
+            (sumAllocatedSectionSeconds + durationNum) / 60
+          )} mins) would exceed total paper duration (${Math.round(paperDurationSeconds / 60)} mins).`
+        );
+        return;
+      }
+    }
 
     try {
       await addSectionApi({
         examId: targetId,
-        title: newSectionTitle.trim(),
+        title: trimmedTitle,
         description: newSectionDesc.trim() || undefined,
-        durationSeconds: newSectionDurationSec !== "" ? Number(newSectionDurationSec) : undefined,
+        durationSeconds: durationNum,
       }).unwrap();
 
       setIsSectionModalOpen(false);
       setNewSectionTitle("");
       setNewSectionDesc("");
       refetchExam();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Add section error:", err);
-      alert("Failed to add section.");
+      const msg = err.data?.error?.message || err.data?.message || err.message || "Failed to add section.";
+      alert(msg);
     }
   };
 
@@ -240,8 +280,10 @@ export const ExamBuilderScreen: React.FC = () => {
 
       setEditingEqId(null);
       refetchExam();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Update question timing error:", err);
+      const msg = err.data?.error?.message || err.data?.message || err.message || "Failed to update question timing.";
+      alert(msg);
     }
   };
 
@@ -254,13 +296,6 @@ export const ExamBuilderScreen: React.FC = () => {
       console.error("Remove question error:", err);
     }
   };
-
-  const sections = apiDetails?.sections || [];
-  const totalQuestions = sections.reduce((sum, sec) => sum + sec.questions.length, 0);
-  const totalMarks = sections.reduce(
-    (sum, sec) => sum + sec.questions.reduce((qSum, q) => qSum + q.marks, 0),
-    0
-  );
 
   return (
     <AppLayout pageTitle={`Exam Builder — ${apiDetails?.title || targetId}`}>
@@ -291,7 +326,6 @@ export const ExamBuilderScreen: React.FC = () => {
                 <Badge variant={isPublished ? "success" : "warning"}>
                   {isPublished ? "Published Revision" : "Draft Revision"}
                 </Badge>
-                <span className="text-xs font-mono text-slate-400">ID: {targetId}</span>
               </div>
               <input
                 type="text"
@@ -513,12 +547,36 @@ export const ExamBuilderScreen: React.FC = () => {
           title="Add New Exam Section"
         >
           <form onSubmit={handleAddSection} className="flex flex-col gap-4">
+            {/* Timing Allocation Summary Banner */}
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-md text-xs flex flex-col gap-1.5">
+              <div className="flex justify-between text-slate-700">
+                <span>Timing Mode:</span>
+                <Badge variant="outline">{timingMode}</Badge>
+              </div>
+              <div className="flex justify-between text-slate-700">
+                <span>Total Paper Duration:</span>
+                <span className="font-mono font-bold text-slate-900">{Math.round(paperDurationSeconds / 60)} mins ({paperDurationSeconds}s)</span>
+              </div>
+              <div className="flex justify-between text-slate-700">
+                <span>Allocated to Existing Sections:</span>
+                <span className="font-mono font-bold text-slate-900">{Math.round(sumAllocatedSectionSeconds / 60)} mins ({sumAllocatedSectionSeconds}s)</span>
+              </div>
+              <div className="flex justify-between text-slate-700">
+                <span>Remaining to Allocate:</span>
+                <span className="font-mono font-bold text-emerald-700">{Math.round(remainingUnallocatedSeconds / 60)} mins ({remainingUnallocatedSeconds}s)</span>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1 italic">
+                Note: Total paper duration must be fully and strictly allocated across all sections (Sum of sections = Total paper duration).
+              </p>
+            </div>
+
             <Input
               label="Section Title *"
               required
               placeholder="e.g. Section A: Multiple Choice Questions"
               value={newSectionTitle}
               onChange={(e) => setNewSectionTitle(e.target.value)}
+              helperText="Every section must have a unique title."
             />
             <Input
               label="Section Description (Optional)"
@@ -527,12 +585,19 @@ export const ExamBuilderScreen: React.FC = () => {
               onChange={(e) => setNewSectionDesc(e.target.value)}
             />
             <Input
-              label="Section Duration in Seconds (Optional)"
+              label="Section Duration in Seconds *"
+              required
               type="number"
-              min={0}
-              placeholder="e.g. 1800 for 30 mins, 70 for 1 min 10 sec"
+              min={1}
+              max={remainingUnallocatedSeconds > 0 ? remainingUnallocatedSeconds : undefined}
+              placeholder={
+                remainingUnallocatedSeconds > 0
+                  ? `e.g. ${remainingUnallocatedSeconds} (Max available: ${remainingUnallocatedSeconds}s)`
+                  : "e.g. 1800 for 30 mins"
+              }
               value={newSectionDurationSec}
               onChange={(e) => setNewSectionDurationSec(e.target.value === "" ? "" : Number(e.target.value))}
+              helperText={`Duration in seconds. Remaining unallocated paper time: ${Math.round(remainingUnallocatedSeconds / 60)} mins (${remainingUnallocatedSeconds}s).`}
             />
             <div className="flex justify-end gap-2 mt-2">
               <Button type="button" variant="ghost" onClick={() => setIsSectionModalOpen(false)}>
@@ -778,39 +843,83 @@ export const ExamBuilderScreen: React.FC = () => {
           onClose={() => setEditingEqId(null)}
           title="Edit Per-Question Time Limit & Points"
         >
-          <div className="flex flex-col gap-4">
-            <Input
-              label="Question Time Limit in Seconds (Optional)"
-              type="number"
-              min={0}
-              placeholder="e.g. 30, 45, 70 (Leave empty for untimed question)"
-              value={editEqTimeLimit}
-              onChange={(e) => setEditEqTimeLimit(e.target.value === "" ? "" : Number(e.target.value))}
-              helperText="Enter exact duration in seconds (e.g. 30 for 30s True/False, 70 for 1 min 10 sec)."
-            />
+          {(() => {
+            const editingQuestionSection = sections.find((s) => s.questions.some((q) => q.id === editingEqId));
+            const editingSectionDuration = editingQuestionSection?.durationSeconds || 0;
+            const otherQuestionsTimeSum = (editingQuestionSection?.questions || [])
+              .filter((q) => q.id !== editingEqId)
+              .reduce((sum, q) => sum + (q.timeLimitSeconds || 0), 0);
+            const remainingSectionTimeForQ = Math.max(0, editingSectionDuration - otherQuestionsTimeSum);
 
-            <Input
-              label="Marks Override (Optional)"
-              type="number"
-              min={1}
-              placeholder="e.g. 10 (Leave empty to use base question marks)"
-              value={editEqMarksOverride}
-              onChange={(e) => setEditEqMarksOverride(e.target.value === "" ? "" : Number(e.target.value))}
-            />
+            return (
+              <div className="flex flex-col gap-4">
+                {editingQuestionSection && (
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-md text-xs flex flex-col gap-1.5">
+                    <div className="flex justify-between text-slate-700">
+                      <span>Section:</span>
+                      <strong className="font-bold text-slate-900">{editingQuestionSection.title}</strong>
+                    </div>
+                    <div className="flex justify-between text-slate-700">
+                      <span>Section Duration:</span>
+                      <span className="font-mono font-bold text-slate-900">{editingSectionDuration}s ({Math.round(editingSectionDuration / 60)}m)</span>
+                    </div>
+                    <div className="flex justify-between text-slate-700">
+                      <span>Allocated to Other Questions:</span>
+                      <span className="font-mono font-bold text-slate-900">{otherQuestionsTimeSum}s</span>
+                    </div>
+                    <div className="flex justify-between text-slate-700">
+                      <span>Remaining Available in Section:</span>
+                      <span className="font-mono font-bold text-emerald-700">{remainingSectionTimeForQ}s</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5 italic">
+                      Note: If question time limits are configured, their sum across the section must strictly equal {editingSectionDuration}s.
+                    </p>
+                  </div>
+                )}
 
-            <div className="flex justify-end gap-2 mt-2">
-              <Button type="button" variant="ghost" onClick={() => setEditingEqId(null)}>
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="primary"
-                onClick={() => editingEqId && handleSaveQuestionOverrides(editingEqId)}
-              >
-                Save Overrides
-              </Button>
-            </div>
-          </div>
+                <Input
+                  label="Question Time Limit in Seconds (Optional)"
+                  type="number"
+                  min={0}
+                  max={remainingSectionTimeForQ > 0 ? remainingSectionTimeForQ : undefined}
+                  placeholder={
+                    remainingSectionTimeForQ > 0
+                      ? `e.g. ${remainingSectionTimeForQ} (Max available: ${remainingSectionTimeForQ}s)`
+                      : "e.g. 30, 45, 70"
+                  }
+                  value={editEqTimeLimit}
+                  onChange={(e) => setEditEqTimeLimit(e.target.value === "" ? "" : Number(e.target.value))}
+                  helperText={
+                    editingSectionDuration > 0
+                      ? `Enter duration in seconds (Max available: ${remainingSectionTimeForQ}s).`
+                      : "Enter exact duration in seconds."
+                  }
+                />
+
+                <Input
+                  label="Marks Override (Optional)"
+                  type="number"
+                  min={1}
+                  placeholder="e.g. 10 (Leave empty to use base question marks)"
+                  value={editEqMarksOverride}
+                  onChange={(e) => setEditEqMarksOverride(e.target.value === "" ? "" : Number(e.target.value))}
+                />
+
+                <div className="flex justify-end gap-2 mt-2">
+                  <Button type="button" variant="ghost" onClick={() => setEditingEqId(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    onClick={() => editingEqId && handleSaveQuestionOverrides(editingEqId)}
+                  >
+                    Save Overrides
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
         </Modal>
       </div>
     </AppLayout>

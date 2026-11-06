@@ -21,13 +21,21 @@ import {
   PlusCircle,
   Link as LinkIcon,
   AlertCircle,
+  Trash2,
+  Edit2,
 } from "lucide-react";
 import {
   useGetExamDetailsQuery,
   useUpdateExamSettingsMutation,
   useCreateExamInvitationMutation,
+  useRevokeExamInvitationMutation,
   useGetExamDistributionStatusQuery,
 } from "@/redux/services/examBuilderApi";
+import {
+  toLocalDatetimeInput,
+  calculateClosesAt,
+  fromLocalDatetimeInput,
+} from "@/utils/dateTime";
 
 export const ExamSettingsAudienceScreen: React.FC = () => {
   const { examId } = useParams<{ examId: string }>();
@@ -39,6 +47,7 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
 
   const [updateExamSettingsApi, { isLoading: isSaving }] = useUpdateExamSettingsMutation();
   const [createInvitationApi, { isLoading: isCreatingInvite }] = useCreateExamInvitationMutation();
+  const [revokeInvitationApi] = useRevokeExamInvitationMutation();
 
   const isPublished = apiDetails?.status === "PUBLISHED";
 
@@ -47,9 +56,7 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
   >("WHOLE_PAPER");
 
   // Timing Hierarchy State
-  const [paperDuration, setPaperDuration] = useState<number>(120);
-  const [defaultSectionDurationSec, setDefaultSectionDurationSec] = useState<number>(1800);
-  const [defaultQuestionTimeLimitSec, setDefaultQuestionTimeLimitSec] = useState<number>(60);
+  const [paperDuration, setPaperDuration] = useState<number>(30);
 
   // Access Policy
   const [registrationPolicy, setRegistrationPolicy] = useState<
@@ -67,8 +74,13 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Invitation Form State
+  const [inviteType, setInviteType] = useState<"CLASS_CODE" | "EMAIL">("CLASS_CODE");
+  const [customCode, setCustomCode] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteMaxUses, setInviteMaxUses] = useState<number>(1);
+  const [inviteMaxUses, setInviteMaxUses] = useState<number>(apiDetails?.capacity || 100);
+  const [isEditingLimit, setIsEditingLimit] = useState(false);
+  const [editedLimit, setEditedLimit] = useState<number>(100);
+  const [isUpdatingLimit, setIsUpdatingLimit] = useState(false);
   const [generatedInvite, setGeneratedInvite] = useState<{
     code: string;
     link: string;
@@ -76,34 +88,102 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
   } | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
 
+  const invitations = distData?.invitations || [];
+  const activeClassInvite = invitations.find(
+    (inv: any) => !inv.recipientEmail && !inv.revokedAt && new Date(inv.expiresAt) > new Date()
+  );
+
+  const handleSaveClassLimit = async () => {
+    if (!activeClassInvite) return;
+    if (editedLimit < (activeClassInvite.usedCount || 0)) {
+      alert(`Capacity cannot be less than current redeemed count (${activeClassInvite.usedCount}).`);
+      return;
+    }
+    setIsUpdatingLimit(true);
+    try {
+      await createInvitationApi({
+        examId: targetId,
+        maxUses: editedLimit,
+      }).unwrap();
+      setIsEditingLimit(false);
+      refetchDist();
+    } catch (err: any) {
+      alert(err.data?.message || err.message || "Failed to update capacity limit.");
+    } finally {
+      setIsUpdatingLimit(false);
+    }
+  };
+
+  const handleRegenerateClassCode = async () => {
+    if (!confirm("Are you sure you want to regenerate the class invitation code? The previous code will be revoked immediately.")) {
+      return;
+    }
+    setErrorMessage(null);
+    try {
+      const res: any = await createInvitationApi({
+        examId: targetId,
+        maxUses: activeClassInvite?.maxUses || apiDetails?.capacity || 100,
+        regenerate: true,
+      }).unwrap();
+
+      const code = res?.data?.code || res?.data?.rawToken || res?.code || res?.rawToken || "INV-CODE";
+      const link = `${window.location.origin}/redeem-invitation?code=${code}`;
+
+      setGeneratedInvite({
+        code,
+        link,
+      });
+      refetchDist();
+    } catch (err: any) {
+      alert(err.data?.message || err.message || "Failed to regenerate class code.");
+    }
+  };
+
   // Sync state with fetched database record
   useEffect(() => {
     if (!apiDetails) return;
-    const timer = setTimeout(() => {
-      if (apiDetails.timingMode) setTimingMode(apiDetails.timingMode as any);
-      if (apiDetails.paperDurationSeconds) setPaperDuration(Math.round(apiDetails.paperDurationSeconds / 60));
-      if (apiDetails.accessPolicy) setRegistrationPolicy(apiDetails.accessPolicy as any);
+    const durMinutes = apiDetails.paperDurationSeconds
+      ? Math.round(apiDetails.paperDurationSeconds / 60)
+      : 30;
 
-      if (apiDetails.registrationOpensAt) {
-        setRegOpensAt(new Date(apiDetails.registrationOpensAt).toISOString().slice(0, 16));
-      }
-      if (apiDetails.registrationClosesAt) {
-        setRegClosesAt(new Date(apiDetails.registrationClosesAt).toISOString().slice(0, 16));
-      }
-      if (apiDetails.startsAt) {
-        setStartsAt(new Date(apiDetails.startsAt).toISOString().slice(0, 16));
-      }
-      if (apiDetails.closesAt) {
-        setClosesAt(new Date(apiDetails.closesAt).toISOString().slice(0, 16));
-      }
-    }, 0);
-    return () => clearTimeout(timer);
+    if (apiDetails.timingMode) setTimingMode(apiDetails.timingMode as any);
+    setPaperDuration(durMinutes);
+    if (apiDetails.accessPolicy) setRegistrationPolicy(apiDetails.accessPolicy as any);
+    if (apiDetails.lateEntryGraceMinutes !== undefined) setGracePeriodMinutes(apiDetails.lateEntryGraceMinutes);
+
+    if (apiDetails.registrationOpensAt) {
+      setRegOpensAt(toLocalDatetimeInput(apiDetails.registrationOpensAt));
+    }
+    if (apiDetails.registrationClosesAt) {
+      setRegClosesAt(toLocalDatetimeInput(apiDetails.registrationClosesAt));
+    }
+    if (apiDetails.startsAt) {
+      const startStr = toLocalDatetimeInput(apiDetails.startsAt);
+      setStartsAt(startStr);
+      setClosesAt(calculateClosesAt(startStr, durMinutes));
+    }
   }, [apiDetails]);
+
+  const handleStartsAtChange = (newStartsAt: string) => {
+    setStartsAt(newStartsAt);
+    if (newStartsAt && paperDuration > 0) {
+      setClosesAt(calculateClosesAt(newStartsAt, paperDuration));
+    }
+  };
+
+  const handlePaperDurationChange = (newDuration: number) => {
+    setPaperDuration(newDuration);
+    if (startsAt && newDuration > 0) {
+      setClosesAt(calculateClosesAt(startsAt, newDuration));
+    }
+  };
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!targetId || isPublished) return;
     setErrorMessage(null);
+
+    const validGrace = Math.min(30, Math.max(0, gracePeriodMinutes || 0));
 
     try {
       await updateExamSettingsApi({
@@ -112,10 +192,11 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
           timingMode,
           paperDurationSeconds: paperDuration * 60,
           accessPolicy: registrationPolicy,
-          registrationOpensAt: regOpensAt ? new Date(regOpensAt).toISOString() : undefined,
-          registrationClosesAt: regClosesAt ? new Date(regClosesAt).toISOString() : undefined,
-          startsAt: startsAt ? new Date(startsAt).toISOString() : undefined,
-          closesAt: closesAt ? new Date(closesAt).toISOString() : undefined,
+          registrationOpensAt: fromLocalDatetimeInput(regOpensAt),
+          registrationClosesAt: fromLocalDatetimeInput(regClosesAt),
+          startsAt: fromLocalDatetimeInput(startsAt),
+          closesAt: fromLocalDatetimeInput(closesAt),
+          lateEntryGraceMinutes: validGrace,
         },
       }).unwrap();
 
@@ -134,31 +215,53 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
     if (!targetId) return;
 
     try {
-      const res: any = await createInvitationApi({
+      const payload: any = {
         examId: targetId,
-        recipientEmail: inviteEmail.trim() || undefined,
-        maxUses: inviteEmail.trim() ? 1 : inviteMaxUses,
-      }).unwrap();
+      };
+
+      if (inviteType === "EMAIL") {
+        if (!inviteEmail.trim()) return;
+        payload.recipientEmail = inviteEmail.trim();
+        payload.maxUses = 1;
+      } else {
+        payload.maxUses = inviteMaxUses > 0 ? inviteMaxUses : 30;
+        if (customCode.trim()) {
+          payload.customCode = customCode.trim();
+        }
+      }
+
+      const res: any = await createInvitationApi(payload).unwrap();
 
       const code =
+        res?.data?.code ||
         res?.data?.rawToken ||
+        res?.code ||
         res?.rawToken ||
-        res?.data?.token ||
-        res?.token ||
         "INV-CODE";
       const link = `${window.location.origin}/redeem-invitation?code=${code}`;
 
       setGeneratedInvite({
         code,
         link,
-        email: inviteEmail.trim() || undefined,
+        email: payload.recipientEmail,
       });
 
       setInviteEmail("");
+      setCustomCode("");
       refetchDist();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Generate invitation error:", err);
-      alert("Failed to create invitation code.");
+      alert(err.data?.message || err.message || "Failed to create invitation code.");
+    }
+  };
+
+  const handleRevokeInvite = async (invitationId: string) => {
+    if (!confirm("Are you sure you want to revoke this invitation code?")) return;
+    try {
+      await revokeInvitationApi({ examId: targetId, invitationId }).unwrap();
+      refetchDist();
+    } catch (err: any) {
+      alert(err.data?.message || err.message || "Failed to revoke invitation.");
     }
   };
 
@@ -167,8 +270,6 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
   };
-
-  const invitations = distData?.invitations || [];
 
   return (
     <AppLayout pageTitle={`Exam Settings — ${apiDetails?.title || targetId}`}>
@@ -194,8 +295,7 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
                 <span>Exam Settings & Schedule Policy</span>
               </h1>
               <p className="text-xs text-slate-500 mt-1">
-                Exam: <span className="font-semibold text-slate-900">{apiDetails?.title}</span> • ID:{" "}
-                <span className="font-mono text-slate-400">{targetId}</span>
+                Exam: <span className="font-semibold text-slate-900">{apiDetails?.title}</span>
               </p>
             </div>
 
@@ -217,7 +317,7 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
               <div>
                 <span className="font-bold text-slate-900">Exam Revision Published & Frozen:</span>
                 <p className="mt-0.5 text-slate-600 leading-relaxed">
-                  This exam revision is published in PostgreSQL. Structural parameters and timing settings are locked to maintain integrity for active candidates.
+                  This exam revision is published. Structural parameters and timing settings are locked to maintain integrity for active candidates.
                 </p>
               </div>
             </div>
@@ -268,13 +368,13 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
             </div>
           </div>
 
-          {/* 2. Multi-Level Timing Hierarchy */}
+          {/* 2. Total Paper Duration */}
           <div className="border-t border-slate-100 pt-4 flex flex-col gap-3">
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-              2. Multi-Level Timing Hierarchy (Paper, Section, Question)
+              2. Total Paper Duration
             </h3>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="max-w-xs">
               <Input
                 label="Whole Paper Duration (Minutes) *"
                 type="number"
@@ -282,32 +382,20 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
                 max={600}
                 disabled={isPublished}
                 value={paperDuration}
-                onChange={(e) => setPaperDuration(Number(e.target.value))}
+                onChange={(e) => handlePaperDurationChange(Number(e.target.value))}
                 helperText="Total allocated paper execution duration."
               />
-
-              <Input
-                label="Section Duration Default (Seconds)"
-                type="number"
-                min={30}
-                disabled={isPublished}
-                placeholder="e.g. 1800 for 30 mins"
-                value={defaultSectionDurationSec}
-                onChange={(e) => setDefaultSectionDurationSec(Number(e.target.value))}
-                helperText="Default duration for sections."
-              />
-
-              <Input
-                label="Question Time Limit Default (Seconds)"
-                type="number"
-                min={10}
-                disabled={isPublished}
-                placeholder="e.g. 30, 45, or 60s"
-                value={defaultQuestionTimeLimitSec}
-                onChange={(e) => setDefaultQuestionTimeLimitSec(Number(e.target.value))}
-                helperText="Default limit for single question."
-              />
             </div>
+            {timingMode === "SECTION_TIMED" && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 p-2.5 rounded">
+                Note: In Per-Section Timed mode, you must specify the duration for each section when adding or editing sections in the Exam Builder. The sum of all section durations must equal this total paper duration.
+              </p>
+            )}
+            {timingMode === "QUESTION_TIMED" && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 p-2.5 rounded">
+                Note: In Per-Question Timed mode, you must specify each section's duration and each question's time limit in the Exam Builder. The sum of question time limits must equal the section duration.
+              </p>
+            )}
           </div>
 
           {/* 3. Window A: Early Registration & Teacher Approval Window */}
@@ -315,14 +403,14 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
                 <Calendar className="w-4 h-4 text-[#4C70A6]" />
-                <span>3. Window A: Early Registration & Approval Window (Days/Weeks Early)</span>
+                <span>3. Window A: Early Registration & Approval Window </span>
               </h3>
               <Badge variant="outline" className="font-mono text-[10px]">
                 Pre-Exam Phase
               </Badge>
             </div>
             <p className="text-[11px] text-slate-500">
-              Students discover the exam and submit registration / approval requests days in advance. Teachers approve or reject requests prior to test day.
+              Students discover the exam and submit registration / approval requests days in advance. 
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -350,7 +438,7 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
                 <Clock className="w-4 h-4 text-[#4C70A6]" />
-                <span>4. Window B: Fixed Synchronous Exam Execution Window (Exact Start & End)</span>
+                <span>4. Window B: Fixed Synchronous Exam Execution Window </span>
               </h3>
             </div>
 
@@ -360,33 +448,39 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
                 type="datetime-local"
                 disabled={isPublished}
                 value={startsAt}
-                onChange={(e) => setStartsAt(e.target.value)}
+                onChange={(e) => handleStartsAtChange(e.target.value)}
                 helperText="Exact server time paper launches for all candidates."
               />
               <Input
-                label="Fixed Exam End Time (Hard Cutoff) *"
+                label="Fixed Exam End Time (Auto-calculated) *"
                 type="datetime-local"
-                disabled={isPublished}
+                disabled={true}
                 value={closesAt}
-                onChange={(e) => setClosesAt(e.target.value)}
-                helperText="Server clock hard cutoff when active sessions terminate."
+                helperText={`Automatically locked: Start Time + ${paperDuration} Minutes`}
               />
             </div>
 
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-md grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              <Input
-                label="Late Entry Grace Period (Minutes)"
-                type="number"
-                min={0}
-                max={60}
-                disabled={isPublished}
-                value={gracePeriodMinutes}
-                onChange={(e) => setGracePeriodMinutes(Number(e.target.value))}
-                helperText="Blocks paper launch past this grace period to prevent question leakage."
-              />
+              <div>
+                <Input
+                  label="Late Entry Grace Period (Minutes, 0–30) *"
+                  type="number"
+                  min={0}
+                  max={30}
+                  disabled={isPublished}
+                  value={gracePeriodMinutes}
+                  onChange={(e) => setGracePeriodMinutes(Math.min(30, Math.max(0, Number(e.target.value))))}
+                  helperText="Entry window: 0 to 30 min after start. Set 0 for zero tolerance."
+                />
+                {startsAt && (
+                  <div className="mt-1.5 text-[11px] text-[#4C70A6] font-mono bg-blue-50/50 p-1.5 rounded border border-blue-100">
+                    Allowed Entry: {new Date(startsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – {new Date(new Date(startsAt).getTime() + (gracePeriodMinutes || 0) * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                )}
+              </div>
               <div className="flex flex-col gap-1 text-[11px] text-slate-700 justify-center">
                 <span className="font-bold">Hard Cutoff Enforced:</span>
-                <span>Active paper sessions automatically lock and auto-submit at <strong className="font-mono">Fixed Exam End Time</strong>.</span>
+                <span>Active paper sessions automatically lock and auto-submit at <strong className="font-mono">Fixed Exam End Time</strong>. Late joiners get the remaining time up to the end time.</span>
               </div>
             </div>
           </div>
@@ -453,61 +547,194 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
                   <Badge variant="info">Invitation Engine Active</Badge>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="flex flex-col gap-2">
-                    <label className="text-xs font-semibold text-slate-700">
-                      Direct Email Invitation (Single-Use Link & Code)
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        placeholder="student@university.edu"
-                        value={inviteEmail}
-                        onChange={(e) => setInviteEmail(e.target.value)}
-                      />
-                      <Button
-                        type="button"
-                        variant="primary"
-                        size="sm"
-                        isLoading={isCreatingInvite}
-                        onClick={handleGenerateInvitation}
-                        icon={<Mail className="w-3.5 h-3.5" />}
-                      >
-                        Send Email
-                      </Button>
-                    </div>
-                    <span className="text-[10px] text-slate-500">
-                      Sends an automated email containing single-use redemption link & code to candidate.
-                    </span>
+                <div className="flex items-center gap-3 border-b border-[#4C70A6]/20 pb-2.5">
+                  <span className="text-xs font-semibold text-slate-700">Issue Mode:</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setInviteType("CLASS_CODE")}
+                      className={`px-3 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${
+                        inviteType === "CLASS_CODE"
+                          ? "bg-[#4C70A6] text-white font-semibold shadow-xs"
+                          : "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      Class / Cohort Code
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInviteType("EMAIL")}
+                      className={`px-3 py-1 rounded text-xs font-medium cursor-pointer transition-colors ${
+                        inviteType === "EMAIL"
+                          ? "bg-[#4C70A6] text-white font-semibold shadow-xs"
+                          : "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50"
+                      }`}
+                    >
+                      Personalized Direct Email
+                    </button>
                   </div>
+                </div>
 
-                  <div className="flex flex-col gap-2 border-l border-slate-200 pl-4">
-                    <label className="text-xs font-semibold text-slate-700">
-                      Shared Class Invitation Code (Multi-Use Limit)
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        type="number"
-                        min={1}
-                        max={500}
-                        placeholder="Max Uses (e.g. 30)"
-                        value={inviteMaxUses}
-                        onChange={(e) => setInviteMaxUses(Number(e.target.value))}
-                      />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        isLoading={isCreatingInvite}
-                        onClick={handleGenerateInvitation}
-                        icon={<PlusCircle className="w-3.5 h-3.5 text-[#4C70A6]" />}
-                      >
-                        Generate Code
-                      </Button>
+                <div className="flex flex-col gap-4">
+                  {inviteType === "EMAIL" ? (
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs font-semibold text-slate-700">
+                        Candidate Email Address (Single-Use Invitation)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          placeholder="student@university.edu"
+                          value={inviteEmail}
+                          onChange={(e) => setInviteEmail(e.target.value)}
+                        />
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="sm"
+                          isLoading={isCreatingInvite}
+                          onClick={handleGenerateInvitation}
+                          icon={<Mail className="w-3.5 h-3.5" />}
+                        >
+                          Send Email Invite
+                        </Button>
+                      </div>
+                      <span className="text-[10px] text-slate-500">
+                        Sends an automated email containing a single-use redemption link & code to candidate.
+                      </span>
                     </div>
-                    <span className="text-[10px] text-slate-500">
-                      Generates a reusable invitation code for class broadcast or printed distribution.
-                    </span>
-                  </div>
+                  ) : activeClassInvite ? (
+                    /* Active Class Code Box */
+                    <div className="bg-white border border-slate-300 rounded-md p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-500 font-medium">Active Class Code:</span>
+                          <span className="font-mono font-bold text-sm text-slate-900 bg-slate-100 px-2.5 py-0.5 rounded border border-slate-300 tracking-wide">
+                            {activeClassInvite.code}
+                          </span>
+                          <Badge variant="info">Code-Only Access</Badge>
+                        </div>
+                        <span className="text-[11px] text-slate-500">
+                          Students enter this code directly on the Catalogue page via <strong>"Redeem Invitation Code"</strong>.
+                        </span>
+                        <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-600 font-medium">
+                          <span>
+                            Redeemed: <strong className="text-slate-900">{activeClassInvite.usedCount} / {activeClassInvite.maxUses}</strong>
+                          </span>
+                          {!isEditingLimit ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditedLimit(activeClassInvite.maxUses);
+                                setIsEditingLimit(true);
+                              }}
+                              className="text-[#4C70A6] hover:underline font-semibold flex items-center gap-1 cursor-pointer ml-1"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                              <span>Edit Capacity</span>
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-1.5 ml-2">
+                              <input
+                                type="number"
+                                min={activeClassInvite.usedCount || 1}
+                                max={5000}
+                                value={editedLimit}
+                                onChange={(e) => setEditedLimit(Number(e.target.value))}
+                                className="w-16 bg-slate-50 border border-slate-300 rounded px-1.5 py-0.5 text-xs text-slate-800 font-mono"
+                              />
+                              <Button
+                                type="button"
+                                variant="primary"
+                                size="sm"
+                                isLoading={isUpdatingLimit}
+                                onClick={handleSaveClassLimit}
+                                className="text-[11px] py-0.5 px-2 bg-[#4C70A6] text-white"
+                              >
+                                Save
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setIsEditingLimit(false)}
+                                className="text-[11px] py-0.5 px-1.5"
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleCopyLink(activeClassInvite.code)}
+                          icon={<Copy className="w-3.5 h-3.5 text-[#4C70A6]" />}
+                        >
+                          {copiedCode ? "Copied!" : "Copy Code"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={handleRegenerateClassCode}
+                          isLoading={isCreatingInvite}
+                        >
+                          Regenerate
+                        </Button>
+                        <button
+                          type="button"
+                          onClick={() => handleRevokeInvite(activeClassInvite.id)}
+                          className="px-2 py-1 bg-red-50 hover:bg-red-100 border border-red-200 rounded text-red-600 font-semibold text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Revoke</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Generate Initial Class Code Box */
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="flex flex-col gap-2">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Custom Code (Optional, e.g. CS401)
+                        </label>
+                        <Input
+                          placeholder="Auto-generated if blank"
+                          value={customCode}
+                          onChange={(e) => setCustomCode(e.target.value.toUpperCase())}
+                          className="font-mono"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Max Allowed Redemptions
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="number"
+                            min={1}
+                            max={500}
+                            value={inviteMaxUses}
+                            onChange={(e) => setInviteMaxUses(Number(e.target.value))}
+                          />
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            isLoading={isCreatingInvite}
+                            onClick={handleGenerateInvitation}
+                            icon={<PlusCircle className="w-3.5 h-3.5 text-[#4C70A6]" />}
+                          >
+                            Generate Code
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Newly Generated Code Banner */}
@@ -516,24 +743,30 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
                     <div>
                       <div className="font-bold text-emerald-900 flex items-center gap-1.5">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                        <span>Invitation Created & Emailed!</span>
+                        <span>{generatedInvite.email ? `Invitation Emailed to ${generatedInvite.email}` : "Class Invitation Code Ready!"}</span>
                       </div>
                       <div className="font-mono text-emerald-800 mt-1">
                         Code: <strong className="font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-emerald-300">{generatedInvite.code}</strong>
                       </div>
-                      <div className="text-[11px] text-emerald-700 font-mono mt-0.5 truncate max-w-md">
-                        Link: {generatedInvite.link}
-                      </div>
+                      {generatedInvite.email ? (
+                        <div className="text-[11px] text-emerald-700 mt-0.5">
+                          Personalized redemption magic link and access code dispatched to candidate inbox.
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-emerald-700 mt-0.5">
+                          Share this code with your class for redemption on the Catalogue page.
+                        </div>
+                      )}
                     </div>
 
                     <Button
                       type="button"
                       variant="secondary"
                       size="sm"
-                      onClick={() => handleCopyLink(generatedInvite.link)}
+                      onClick={() => handleCopyLink(generatedInvite.code)}
                       icon={<Copy className="w-3.5 h-3.5 text-emerald-700" />}
                     >
-                      {copiedCode ? "Copied!" : "Copy Link"}
+                      {copiedCode ? "Copied!" : "Copy Code"}
                     </Button>
                   </div>
                 )}
@@ -544,26 +777,60 @@ export const ExamSettingsAudienceScreen: React.FC = () => {
                     <label className="text-xs font-bold text-slate-800">
                       Issued Invitations History ({invitations.length})
                     </label>
-                    <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto">
-                      {invitations.map((inv: any) => (
-                        <div
-                          key={inv.id}
-                          className="flex items-center justify-between p-2 bg-white rounded border border-slate-200 text-xs"
-                        >
-                          <div className="flex items-center gap-3 font-mono">
-                            <Badge variant="outline">{inv.recipientEmail || "Class Code"}</Badge>
-                            <span className="font-bold text-slate-800">Uses: {inv.usedCount} / {inv.maxUses}</span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => handleCopyLink(`${window.location.origin}/redeem-invitation?code=${inv.id}`)}
-                            className="text-[#4C70A6] hover:underline font-semibold text-[11px] flex items-center gap-1 cursor-pointer"
+                    <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
+                      {invitations.map((inv: any) => {
+                        const codeStr = inv.code || inv.rawToken || "INV-CODE";
+                        const isRevoked = !!inv.revokedAt;
+                        const isExpired = new Date(inv.expiresAt) < new Date();
+                        const isFull = inv.usedCount >= inv.maxUses;
+
+                        return (
+                          <div
+                            key={inv.id}
+                            className="flex items-center justify-between p-2.5 bg-white rounded border border-slate-200 text-xs gap-3"
                           >
-                            <LinkIcon className="w-3 h-3" />
-                            <span>Copy Access Link</span>
-                          </button>
-                        </div>
-                      ))}
+                            <div className="flex items-center gap-3 font-mono">
+                              <span className="font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                                {codeStr}
+                              </span>
+                              <Badge variant="outline">{inv.recipientEmail || "Class Code"}</Badge>
+                              <span className="text-slate-700 font-semibold">Uses: {inv.usedCount} / {inv.maxUses}</span>
+                              {isRevoked ? (
+                                <Badge variant="danger">Revoked</Badge>
+                              ) : isExpired ? (
+                                <Badge variant="outline">Expired</Badge>
+                              ) : isFull ? (
+                                <Badge variant="warning">Full</Badge>
+                              ) : (
+                                <Badge variant="success">Active</Badge>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {!isRevoked && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyLink(codeStr)}
+                                  className="text-[#4C70A6] hover:underline font-semibold text-[11px] flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                  <span>Copy Code</span>
+                                </button>
+                              )}
+                              {!isRevoked && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRevokeInvite(inv.id)}
+                                  className="text-red-500 hover:text-red-700 font-semibold text-[11px] flex items-center gap-1 cursor-pointer ml-2"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>Revoke</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

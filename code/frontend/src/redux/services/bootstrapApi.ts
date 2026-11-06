@@ -19,9 +19,33 @@ export interface CreateTeacherInvitationRequest {
     email: string;
 }
 
+export interface TeacherInvitationItem {
+    id: string;
+    email: string;
+    role: string;
+    status: 'ISSUED' | 'REDEEMED' | 'REVOKED' | 'EXPIRED';
+    expiresAt: string;
+    createdAt: string;
+    redeemedAt?: string | null;
+    revokedAt?: string | null;
+    issuedBy?: string;
+    redeemedBy?: string;
+}
+
 export interface CreateTeacherInvitationResponse {
     message: string;
-    token: string; // Only for testing, in production this would be emailed
+    invitationId: string;
+    email: string;
+    expiresAt: string;
+    invitationToken: string;
+}
+
+export interface ValidateTeacherInvitationResponse {
+    isValid: boolean;
+    email: string;
+    status: 'ISSUED' | 'REDEEMED' | 'REVOKED' | 'EXPIRED' | 'INVALID' | 'ALREADY_REGISTERED';
+    expiresAt?: string;
+    message: string;
 }
 
 export interface RedeemTeacherInvitationRequest {
@@ -63,7 +87,7 @@ export const bootstrapApi = createApi({
         const baseQuery = await getBaseQuery();
         return baseQuery(args, api, extraOptions);
     },
-    tagTypes: ['Bootstrap'],
+    tagTypes: ['Bootstrap', 'TeacherInvitations'],
     endpoints: (builder) => ({
         // System Owner creation (Bootstrapping)
         createOwner: builder.mutation<CreateOwnerResponse, CreateOwnerRequest>({
@@ -74,6 +98,15 @@ export const bootstrapApi = createApi({
             }),
         }),
 
+        // Owner lists Teacher Invitations
+        getTeacherInvitations: builder.query<TeacherInvitationItem[], void>({
+            query: () => ({
+                url: '/owner/teacher-invitations',
+                method: 'GET',
+            }),
+            providesTags: ['TeacherInvitations'],
+        }),
+
         // Owner invites Teacher
         createTeacherInvitation: builder.mutation<CreateTeacherInvitationResponse, CreateTeacherInvitationRequest>({
             query: (data) => ({
@@ -81,6 +114,26 @@ export const bootstrapApi = createApi({
                 method: 'POST',
                 data,
             }),
+            invalidatesTags: ['TeacherInvitations'],
+        }),
+
+        // Owner revokes Teacher Invitation
+        revokeTeacherInvitation: builder.mutation<{ message: string }, string>({
+            query: (invitationId) => ({
+                url: `/owner/teacher-invitations/${invitationId}/revoke`,
+                method: 'POST',
+            }),
+            invalidatesTags: ['TeacherInvitations'],
+        }),
+
+        // Validate Teacher Invitation Token (Public)
+        validateTeacherInvitation: builder.query<ValidateTeacherInvitationResponse, string>({
+            query: (token) => ({
+                url: '/teacher-invitations/validate',
+                method: 'GET',
+                params: { token },
+            }),
+            keepUnusedDataFor: 0,
         }),
 
         // Teacher redeems invitation
@@ -90,12 +143,17 @@ export const bootstrapApi = createApi({
                 method: 'POST',
                 data,
             }),
+            invalidatesTags: ['TeacherInvitations'],
         }),
     }),
 });
 
 export const {
     useCreateOwnerMutation,
+    useGetTeacherInvitationsQuery,
     useCreateTeacherInvitationMutation,
+    useRevokeTeacherInvitationMutation,
+    useValidateTeacherInvitationQuery,
+    useLazyValidateTeacherInvitationQuery,
     useRedeemTeacherInvitationMutation,
 } = bootstrapApi;

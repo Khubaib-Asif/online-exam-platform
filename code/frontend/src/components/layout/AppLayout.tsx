@@ -93,6 +93,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children, lockdownMode }) 
                 return [
                     { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
                     { label: "Exams", path: "/exams", icon: BookOpen },
+                    { label: "Requests", path: "/registration-requests", icon: Users },
                     { label: "Question Bank", path: "/question-bank", icon: HelpCircle },
                     { label: "Monitoring", path: "/monitoring", icon: Activity },
                     { label: "Grading", path: "/grading", icon: FileCheck },

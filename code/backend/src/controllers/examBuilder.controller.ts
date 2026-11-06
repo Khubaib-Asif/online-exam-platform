@@ -8,12 +8,13 @@ const CreateExamSchema = z.object({
   description: z.string().trim().optional(),
   accessPolicy: z.enum(['PUBLIC', 'INVITATION_ONLY', 'APPROVAL_REQUIRED']).default('INVITATION_ONLY'),
   capacity: z.number().int().positive().optional(),
-  registrationOpensAt: z.coerce.date().optional().default(() => new Date()),
-  registrationClosesAt: z.coerce.date().optional().default(() => new Date(Date.now() + 86400000 * 7)),
-  startsAt: z.coerce.date().optional().default(() => new Date(Date.now() + 86400000 * 7)),
-  closesAt: z.coerce.date().optional().default(() => new Date(Date.now() + 86400000 * 8)),
+  registrationOpensAt: z.coerce.date().optional(),
+  registrationClosesAt: z.coerce.date().optional(),
+  startsAt: z.coerce.date().optional(),
+  closesAt: z.coerce.date().optional(),
   timingMode: z.enum(['WHOLE_PAPER', 'SECTION_TIMED', 'QUESTION_TIMED', 'MIXED']).default('WHOLE_PAPER'),
   paperDurationSeconds: z.number().int().positive('Paper duration must be a positive integer').default(7200),
+  lateEntryGraceMinutes: z.number().int().min(0, 'Grace period cannot be negative').max(30, 'Grace period cannot exceed 30 minutes').default(15).optional(),
 });
 
 const UpdateExamSettingsSchema = z.object({
@@ -25,6 +26,7 @@ const UpdateExamSettingsSchema = z.object({
   registrationClosesAt: z.coerce.date().optional(),
   startsAt: z.coerce.date().optional(),
   closesAt: z.coerce.date().optional(),
+  lateEntryGraceMinutes: z.number().int().min(0, 'Grace period cannot be negative').max(30, 'Grace period cannot exceed 30 minutes').optional(),
   timingMode: z.enum(['WHOLE_PAPER', 'SECTION_TIMED', 'QUESTION_TIMED', 'MIXED']).optional(),
   paperDurationSeconds: z.number().int().positive().optional(),
 });

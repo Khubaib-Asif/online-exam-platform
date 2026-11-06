@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 const RedeemInvitationSchema = z.object({
   token: z.string().trim().min(1, 'Invitation code is required'),
+  examId: z.string().uuid().optional(),
 });
 
 const DecideRequestSchema = z.object({
@@ -15,6 +16,8 @@ const CreateExamInvitationSchema = z.object({
   recipientEmail: z.string().email().optional(),
   maxUses: z.number().int().positive().optional(),
   expiresInSeconds: z.number().int().positive().optional(),
+  customCode: z.string().trim().min(3).max(32).optional(),
+  regenerate: z.boolean().optional(),
 });
 
 export class RegistrationController {
@@ -56,7 +59,7 @@ export class RegistrationController {
   static async redeemExamInvitation(req: AuthRequest, res: Response, next: NextFunction) {
     try {
       const validated = RedeemInvitationSchema.parse(req.body);
-      const registration = await RegistrationService.redeemExamInvitation(req.user!.id, validated.token);
+      const registration = await RegistrationService.redeemExamInvitation(req.user!.id, validated.token, validated.examId);
       res.json({ data: registration, message: 'Invitation code redeemed successfully' });
     } catch (error) {
       next(error);
@@ -116,6 +119,18 @@ export class RegistrationController {
       const examId = req.params.id as string;
       const status = await RegistrationService.getExamDistributionStatus(req.user!.id, examId);
       res.json({ data: status });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // 10. DELETE /v1/teacher/exams/:id/invitations/:invitationId
+  static async revokeExamInvitation(req: AuthRequest, res: Response, next: NextFunction) {
+    try {
+      const examId = req.params.id as string;
+      const invitationId = req.params.invitationId as string;
+      const result = await RegistrationService.revokeExamInvitation(req.user!.id, examId, invitationId);
+      res.json({ data: result, message: 'Exam invitation revoked successfully' });
     } catch (error) {
       next(error);
     }

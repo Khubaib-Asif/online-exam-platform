@@ -9,6 +9,7 @@ export interface TeacherExamItem {
   capacity: number | null;
   startsAt: string;
   closesAt: string;
+  lateEntryGraceMinutes?: number;
   registrationOpensAt: string;
   registrationClosesAt: string;
   publishedAt: string | null;
@@ -48,6 +49,7 @@ export interface DetailedExamResponse extends TeacherExamItem {
   revisionId: string;
   revisionStatus: string;
   paperDurationSeconds: number;
+  lateEntryGraceMinutes?: number;
   proctoringPolicy: any;
   gradingPolicy: any;
   settings: any;
@@ -64,6 +66,7 @@ export interface CreateExamPayload {
   registrationClosesAt?: string;
   startsAt?: string;
   closesAt?: string;
+  lateEntryGraceMinutes?: number;
   timingMode?: 'WHOLE_PAPER' | 'SECTION_TIMED' | 'QUESTION_TIMED' | 'MIXED';
   paperDurationSeconds?: number;
 }
@@ -204,7 +207,7 @@ export const examBuilderApi = createApi({
     // 13. Create Exam Invitation
     createExamInvitation: builder.mutation<
       any,
-      { examId: string; recipientEmail?: string; maxUses?: number; expiresInSeconds?: number }
+      { examId: string; recipientEmail?: string; maxUses?: number; expiresInSeconds?: number; customCode?: string; regenerate?: boolean }
     >({
       query: ({ examId, ...data }) => ({
         url: `/teacher/exams/${examId}/invitations`,
@@ -214,7 +217,16 @@ export const examBuilderApi = createApi({
       invalidatesTags: ['ExamBuilder'],
     }),
 
-    // 14. Get Exam Distribution & Invitations Status
+    // 14. Revoke Exam Invitation
+    revokeExamInvitation: builder.mutation<any, { examId: string; invitationId: string }>({
+      query: ({ examId, invitationId }) => ({
+        url: `/teacher/exams/${examId}/invitations/${invitationId}`,
+        method: 'DELETE',
+      }),
+      invalidatesTags: ['ExamBuilder'],
+    }),
+
+    // 15. Get Exam Distribution & Invitations Status
     getExamDistributionStatus: builder.query<any, string>({
       query: (examId) => ({
         url: `/teacher/exams/${examId}/distribution`,
@@ -239,5 +251,6 @@ export const {
   usePublishExamMutation,
   useCloseExamMutation,
   useCreateExamInvitationMutation,
+  useRevokeExamInvitationMutation,
   useGetExamDistributionStatusQuery,
 } = examBuilderApi;

@@ -38,7 +38,7 @@ export const QuestionPreviewScreen: React.FC = () => {
       };
 
   return (
-    <AppLayout pageTitle={`Question Preview — ${question.id}`}>
+    <AppLayout pageTitle="Question Preview">
       <div className="max-w-2xl mx-auto flex flex-col gap-6">
         <div>
           <button

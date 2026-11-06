@@ -13,6 +13,7 @@ import {
   Mail,
   Calendar,
   FileText,
+  AlertTriangle,
 } from "lucide-react";
 import {
   useGetTeacherPendingRequestsQuery,
@@ -37,6 +38,11 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
         examTitle: foundRequest.examTitle,
         requestedAt: new Date(foundRequest.requestedAt).toLocaleString(),
         status: (foundRequest.status === "REQUESTED" ? "PENDING" : foundRequest.status) as "PENDING" | "APPROVED" | "REJECTED",
+        registrationOpensAt: foundRequest.registrationOpensAt,
+        registrationClosesAt: foundRequest.registrationClosesAt,
+        startsAt: foundRequest.startsAt,
+        closesAt: foundRequest.closesAt,
+        isRegistrationOpen: foundRequest.isRegistrationOpen,
         studentContext: "Student requested registration for approval-required examination session.",
       }
     : {
@@ -48,8 +54,18 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
         examTitle: "Examination Session",
         requestedAt: "Recently Submitted",
         status: "PENDING" as const,
+        registrationOpensAt: null,
+        registrationClosesAt: null,
+        startsAt: null,
+        closesAt: null,
+        isRegistrationOpen: true,
         studentContext: "Registration request queued for teacher review.",
       };
+
+  const nowMs = Date.now();
+  const regCloseMs = request.registrationClosesAt ? new Date(request.registrationClosesAt).getTime() : 0;
+  const startsAtMs = request.startsAt ? new Date(request.startsAt).getTime() : 0;
+  const isClosed = (request.isRegistrationOpen === false) || (regCloseMs > 0 && nowMs > regCloseMs) || (startsAtMs > 0 && nowMs > startsAtMs);
 
   const [decision, setDecision] = useState<"PENDING" | "APPROVED" | "REJECTED">(request.status);
   const [decisionNotes, setDecisionNotes] = useState("");
@@ -120,9 +136,6 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
                 <Mail className="w-3.5 h-3.5 text-slate-400" />
                 <span>{request.studentEmail}</span>
               </div>
-              <div className="text-xs text-slate-500 font-mono">
-                ID: {request.studentId}
-              </div>
             </div>
 
             <div className="bg-slate-50/80 p-4 rounded-md border border-slate-200/80 flex flex-col gap-2">
@@ -130,7 +143,6 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
                 Target Exam
               </h3>
               <div className="text-xs font-semibold text-slate-900">{request.examTitle}</div>
-              <div className="text-xs text-slate-400 font-mono text-[11px]">{request.examId}</div>
               <div className="text-xs text-slate-500 font-mono flex items-center gap-1 mt-1">
                 <Calendar className="w-3.5 h-3.5 text-slate-400" />
                 <span>{request.requestedAt}</span>
@@ -146,6 +158,19 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
                 Registration Note:
               </span>
               <p className="text-slate-600">{request.studentContext}</p>
+            </div>
+          )}
+
+          {/* Closed Window Alert */}
+          {isClosed && isPending && (
+            <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-md text-xs text-amber-800 flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold">Registration Window Closed:</span>
+                <p className="mt-0.5 text-amber-700">
+                  The registration deadline for this examination has passed. New approvals cannot be granted. You may dismiss or reject this request.
+                </p>
+              </div>
             </div>
           )}
 
@@ -169,9 +194,14 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
                 <Button
                   variant="primary"
                   size="md"
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                  className={`flex-1 ${
+                    isClosed
+                      ? "bg-slate-300 text-slate-500 cursor-not-allowed"
+                      : "bg-emerald-600 hover:bg-emerald-700 text-white"
+                  }`}
+                  disabled={isClosed}
                   isLoading={isDeciding}
-                  onClick={() => handleRecordDecision("APPROVED")}
+                  onClick={() => !isClosed && handleRecordDecision("APPROVED")}
                   icon={<CheckCircle className="w-4 h-4" />}
                 >
                   Approve Registration
@@ -184,7 +214,7 @@ export const TeacherRegistrationReviewScreen: React.FC = () => {
                   onClick={() => handleRecordDecision("REJECTED")}
                   icon={<XCircle className="w-4 h-4" />}
                 >
-                  Reject Request
+                  {isClosed ? "Dismiss / Reject Request" : "Reject Request"}
                 </Button>
               </div>
             </div>

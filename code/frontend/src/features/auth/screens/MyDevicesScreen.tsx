@@ -172,7 +172,7 @@ export const MyDevicesScreen: React.FC = () => {
             <div className="space-y-1">
               <span className="font-bold text-slate-900 block">Desktop App Registration Protocol</span>
               <p className="text-[11px] text-slate-500 leading-relaxed">
-                Device registration extracts native hardware fingerprints via the signed Electron desktop shell rather than browser DOM fingerprints to prevent spoofing.
+                Device registration is enforced via the signed Electron desktop shell.
               </p>
             </div>
           </div>
@@ -192,7 +192,7 @@ export const MyDevicesScreen: React.FC = () => {
             <div className="space-y-1">
               <span className="font-bold block">Authentic Hardware Signature</span>
               <p className="leading-relaxed">
-                To guarantee exam integrity, devices must be registered through the signed Electron Desktop Launcher to capture host OS fingerprints.
+                To guarantee exam integrity, devices must be registered through the signed Electron Desktop Launcher.
               </p>
             </div>
           </div>

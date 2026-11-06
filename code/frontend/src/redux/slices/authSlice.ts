@@ -7,10 +7,22 @@ export type BootstrapStatus = "UNINITIALISED" | "INITIALISED";
 export interface UserProfile {
     id: string;
     email: string;
+    firstName?: string;
+    lastName?: string;
     fullName: string;
     role: SystemRole;
     isEmailVerified: boolean;
 }
+
+export const computeFullName = (u: any): string => {
+    if (!u) return "";
+    if (u.fullName && typeof u.fullName === "string" && u.fullName.trim().length > 0) {
+        return u.fullName.trim();
+    }
+    const combined = `${u.firstName || ''} ${u.lastName || ''}`.trim();
+    if (combined.length > 0) return combined;
+    return u.email ? u.email : "User";
+};
 
 interface AuthState {
     user: UserProfile | null;
@@ -32,7 +44,13 @@ const getInitialAuthState = (): AuthState => {
             storedToken = localStorage.getItem('accessToken') || sessionStorage.getItem('accessToken');
             const userJson = localStorage.getItem('user') || sessionStorage.getItem('user');
             if (userJson) {
-                storedUser = JSON.parse(userJson);
+                const parsed = JSON.parse(userJson);
+                if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                    storedUser = {
+                        ...parsed,
+                        fullName: computeFullName(parsed),
+                    };
+                }
             }
         } catch (e) {
             console.warn('Failed to parse stored auth:', e);
@@ -60,13 +78,25 @@ const authSlice = createSlice({
         setAuth: (
             state,
             action: PayloadAction<{
-                user: UserProfile;
+                user: Omit<UserProfile, 'fullName'> & { fullName?: string };
                 accessToken: string;
             }>
         ) => {
-            state.user = action.payload.user;
+            const rawUser = action.payload.user;
+            if (!rawUser) {
+                state.user = null;
+                state.accessToken = action.payload.accessToken;
+                state.isAuthenticated = false;
+                return;
+            }
+            const fullUser: UserProfile = {
+                ...rawUser,
+                fullName: computeFullName(rawUser),
+            };
+            state.user = fullUser;
             state.accessToken = action.payload.accessToken;
             state.isAuthenticated = true;
+            state.bootstrapStatus = "INITIALISED";
         },
 
         updateUser: (
