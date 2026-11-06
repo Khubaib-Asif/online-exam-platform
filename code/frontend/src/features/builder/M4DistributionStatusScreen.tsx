@@ -76,7 +76,7 @@ export const M4DistributionStatusScreen: React.FC = () => {
     }
   };
 
-  const handleCreateInvite = async (e: React.FormEvent) => {
+  const handleCreateInvite = async (e: React.FormEvent, type: "CLASS_CODE" | "EMAIL") => {
     e.preventDefault();
     if (!targetId) return;
     setErrorMessage(null);
@@ -86,7 +86,7 @@ export const M4DistributionStatusScreen: React.FC = () => {
         examId: targetId,
       };
 
-      if (inviteType === "EMAIL") {
+      if (type === "EMAIL") {
         if (!inviteEmail.trim()) {
           setErrorMessage("Please enter a valid student email address.");
           return;
@@ -403,7 +403,7 @@ export const M4DistributionStatusScreen: React.FC = () => {
                     </div>
                   </div>
 
-                  <form onSubmit={handleCreateInvite} className="flex flex-col sm:flex-row gap-3 items-end">
+                  <form onSubmit={(e) => handleCreateInvite(e, "CLASS_CODE")} className="flex flex-col sm:flex-row gap-3 items-end">
                     <div className="flex-1">
                       <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                         Custom Code (Optional, e.g. MATH101)
@@ -453,11 +453,7 @@ export const M4DistributionStatusScreen: React.FC = () => {
                 </div>
 
                 <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    setInviteType("EMAIL");
-                    handleCreateInvite(e);
-                  }}
+                  onSubmit={(e) => handleCreateInvite(e, "EMAIL")}
                   className="flex flex-col sm:flex-row gap-3 items-end"
                 >
                   <div className="flex-1">
@@ -476,7 +472,7 @@ export const M4DistributionStatusScreen: React.FC = () => {
                     type="submit"
                     variant="primary"
                     size="md"
-                    isLoading={isCreatingInvite && inviteType === "EMAIL"}
+                    isLoading={isCreatingInvite}
                     className="bg-[#4C70A6] hover:bg-[#3F5E8E] text-white"
                     icon={<Mail className="w-3.5 h-3.5" />}
                   >

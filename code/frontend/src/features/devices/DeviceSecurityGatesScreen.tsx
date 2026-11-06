@@ -42,7 +42,7 @@ export const DeviceSecurityGatesScreen: React.FC = () => {
   const { examId } = useParams<{ examId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const targetExamId = examId || "";
+  const targetExamId = examId || searchParams.get("examId") || "";
   const paramTicket = searchParams.get("ticket") || "";
 
   const { user } = useAppSelector((state) => state.auth);

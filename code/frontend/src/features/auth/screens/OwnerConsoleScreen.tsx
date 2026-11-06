@@ -49,6 +49,7 @@ export const OwnerConsoleScreen: React.FC = () => {
 
   // Revoke target modal
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
 
   const handleSendInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,11 +71,13 @@ export const OwnerConsoleScreen: React.FC = () => {
   };
 
   const handleConfirmRevoke = async (id: string) => {
+    setRevokeError(null);
     try {
       await revokeTeacherInvitation(id).unwrap();
       setRevokingId(null);
+      setRevokeError(null);
     } catch (err: any) {
-      console.error("Failed to revoke teacher invitation:", err);
+      setRevokeError(err?.data?.message || err?.message || "Failed to revoke teacher invitation.");
     }
   };
 
@@ -223,7 +226,10 @@ export const OwnerConsoleScreen: React.FC = () => {
                           size="sm"
                           className="text-rose-600 hover:text-rose-700 hover:bg-rose-50 cursor-pointer"
                           icon={<Trash2 className="w-3.5 h-3.5" />}
-                          onClick={() => setRevokingId(inv.id)}
+                          onClick={() => {
+                            setRevokeError(null);
+                            setRevokingId(inv.id);
+                          }}
                         >
                           Revoke
                         </Button>
@@ -283,7 +289,7 @@ export const OwnerConsoleScreen: React.FC = () => {
             <Button
               type="submit"
               size="sm"
-              loading={isInviting}
+              isLoading={isInviting}
               icon={<UserPlus className="w-4 h-4" />}
             >
               Send Invitation
@@ -345,11 +351,21 @@ export const OwnerConsoleScreen: React.FC = () => {
       {/* Revoke Confirmation Modal */}
       <Modal
         isOpen={!!revokingId}
-        onClose={() => setRevokingId(null)}
+        onClose={() => {
+          setRevokingId(null);
+          setRevokeError(null);
+        }}
         title="Revoke Teacher Invitation"
         subtitle="Are you sure you want to invalidate this invitation?"
       >
         <div className="p-6 flex flex-col gap-4">
+          {revokeError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-md flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{revokeError}</span>
+            </div>
+          )}
+
           <p className="text-xs text-slate-600">
             Once revoked, the recipient will no longer be able to use the invitation link or create an account. This action cannot be undone.
           </p>
@@ -358,7 +374,10 @@ export const OwnerConsoleScreen: React.FC = () => {
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => setRevokingId(null)}
+              onClick={() => {
+                setRevokingId(null);
+                setRevokeError(null);
+              }}
               disabled={isRevoking}
             >
               Cancel
@@ -367,7 +386,7 @@ export const OwnerConsoleScreen: React.FC = () => {
               variant="secondary"
               size="sm"
               className="bg-rose-600 text-white hover:bg-rose-700 border-rose-600"
-              loading={isRevoking}
+              isLoading={isRevoking}
               onClick={() => revokingId && handleConfirmRevoke(revokingId)}
             >
               Revoke Invitation

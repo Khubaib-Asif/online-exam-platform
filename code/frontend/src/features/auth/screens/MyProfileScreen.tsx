@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { AppLayout } from "@components/layout/AppLayout";
 import { logout } from "@redux/slices/authSlice";
 import { useAppSelector, useAppDispatch } from "@/redux/hooks";
@@ -23,6 +23,16 @@ export const MyProfileScreen: React.FC = () => {
     const [confirmPassword, setConfirmPassword] = useState("");
     const [formError, setFormError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Cleanup pending timer on unmount to prevent stale callbacks
+    useEffect(() => {
+        return () => {
+            if (closeTimerRef.current) {
+                clearTimeout(closeTimerRef.current);
+            }
+        };
+    }, []);
 
     const handleSignOut = async () => {
         try {
@@ -36,6 +46,10 @@ export const MyProfileScreen: React.FC = () => {
     };
 
     const handleOpenPasswordModal = () => {
+        if (closeTimerRef.current) {
+            clearTimeout(closeTimerRef.current);
+            closeTimerRef.current = null;
+        }
         setCurrentPassword("");
         setNewPassword("");
         setConfirmPassword("");
@@ -45,6 +59,10 @@ export const MyProfileScreen: React.FC = () => {
     };
 
     const handleClosePasswordModal = () => {
+        if (closeTimerRef.current) {
+            clearTimeout(closeTimerRef.current);
+            closeTimerRef.current = null;
+        }
         setIsPasswordModalOpen(false);
         setFormError(null);
         setSuccessMessage(null);
@@ -78,7 +96,8 @@ export const MyProfileScreen: React.FC = () => {
             setCurrentPassword("");
             setNewPassword("");
             setConfirmPassword("");
-            setTimeout(() => {
+            closeTimerRef.current = setTimeout(() => {
+                closeTimerRef.current = null;
                 handleClosePasswordModal();
             }, 1500);
         } catch (err: any) {
@@ -274,7 +293,7 @@ export const MyProfileScreen: React.FC = () => {
                         <Button
                             type="submit"
                             size="sm"
-                            loading={isChangingPassword}
+                            isLoading={isChangingPassword}
                             disabled={isChangingPassword || !!successMessage}
                         >
                             Update Password

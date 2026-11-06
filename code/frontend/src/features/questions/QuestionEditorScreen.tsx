@@ -41,7 +41,7 @@ export const QuestionEditorScreen: React.FC = () => {
   const { data: banksData } = useGetQuestionBanksQuery();
   const defaultBankId = banksData?.[0]?.id || "qb-default";
 
-  const { data: questionDetails, isLoading: isDetailsLoading } = useGetQuestionDetailsQuery(
+  const { data: questionDetails, isLoading: isDetailsLoading, error: detailsError } = useGetQuestionDetailsQuery(
     questionId || "",
     { skip: !isEditing || !questionId }
   );
@@ -208,7 +208,12 @@ export const QuestionEditorScreen: React.FC = () => {
         setFormError("Please select 1 correct answer option.");
         return;
       }
-      payload.options = options.map((o) => o.text.trim());
+      const mcqTrimmed = options.map((o) => o.text.trim());
+      if (new Set(mcqTrimmed).size !== mcqTrimmed.length) {
+        setFormError("Option texts must be unique. Duplicate option text found.");
+        return;
+      }
+      payload.options = mcqTrimmed;
       payload.answerKey = correctOpt.text.trim();
     } else if (type === "MSQ") {
       if (options.length < 2) {
@@ -225,7 +230,12 @@ export const QuestionEditorScreen: React.FC = () => {
         setFormError("Please select at least 1 correct answer option for MSQ.");
         return;
       }
-      payload.options = options.map((o) => o.text.trim());
+      const msqTrimmed = options.map((o) => o.text.trim());
+      if (new Set(msqTrimmed).size !== msqTrimmed.length) {
+        setFormError("Option texts must be unique. Duplicate option text found.");
+        return;
+      }
+      payload.options = msqTrimmed;
       payload.answerKey = correctOpts.map((o) => o.text.trim());
     } else if (type === "TRUE_FALSE") {
       const selected = options.find((o) => o.isCorrect)?.text;
@@ -253,6 +263,47 @@ export const QuestionEditorScreen: React.FC = () => {
   };
 
   const isSaving = isCreating || isUpdating;
+
+  // Error state when loading question details fails in edit mode
+  if (isEditing && detailsError) {
+    const errAny = detailsError as any;
+    const errMsg = errAny?.data?.message || errAny?.message || "Failed to load question details.";
+    const errStatus = errAny?.status;
+    const title = errStatus === 404 || errMsg.includes("NOT_FOUND")
+      ? "Question Not Found"
+      : errStatus === 403 || errMsg.includes("FORBIDDEN")
+      ? "Access Denied"
+      : "Error Loading Question";
+
+    return (
+      <AppLayout pageTitle={title}>
+        <div className="max-w-xl mx-auto flex flex-col gap-6 mt-12">
+          <div>
+            <button
+              type="button"
+              onClick={() => navigate("/question-bank")}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to Question Bank</span>
+            </button>
+          </div>
+          <div className="bg-white border border-red-200 rounded-md p-6 shadow-2xs flex flex-col items-center gap-4 text-center">
+            <AlertCircle className="w-10 h-10 text-red-500" />
+            <h2 className="text-lg font-bold text-slate-900">{title}</h2>
+            <p className="text-xs text-slate-600 max-w-sm">{errMsg}</p>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => navigate("/question-bank")}
+            >
+              Return to Question Bank
+            </Button>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout pageTitle={isEditing ? `Edit Question — ${questionId}` : "Create Question"}>

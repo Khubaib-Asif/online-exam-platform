@@ -172,8 +172,8 @@ export const ExamDetailsScreen: React.FC = () => {
             <div className="shrink-0 flex flex-col items-end gap-2">
               {currentRegistrationState === "APPROVED" && (() => {
                 const nowMs = Date.now();
-                const startsAtMs = exam.startsAt ? new Date(exam.startsAt).getTime() : 0;
-                const closesAtMs = exam.closesAt ? new Date(exam.closesAt).getTime() : 0;
+                const startsAtMs = apiDetails.startsAt ? new Date(apiDetails.startsAt).getTime() : 0;
+                const closesAtMs = apiDetails.closesAt ? new Date(apiDetails.closesAt).getTime() : 0;
                 const lateGraceMs = (apiDetails?.lateEntryGraceMinutes ?? 15) * 60 * 1000;
                 const isBeforeStart = startsAtMs > 0 && nowMs < startsAtMs;
                 const isAfterClose = closesAtMs > 0 && nowMs > closesAtMs;
@@ -207,7 +207,7 @@ export const ExamDetailsScreen: React.FC = () => {
                     )}
                     {isBeforeStart && (
                       <span className="text-xs font-mono text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded">
-                        Exam opens at {new Date(exam.startsAt).toLocaleString()}
+                        Exam opens at {exam.startDate}
                       </span>
                     )}
                     {!isBeforeStart && isPastLateEntry && !isAfterClose && (

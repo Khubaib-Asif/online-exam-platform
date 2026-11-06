@@ -169,8 +169,14 @@ export class AuthService {
             throw new AppError(404, 'Teacher invitation not found', 'INVITATION_NOT_FOUND');
         }
 
-        if (invitation.status === 'REDEEMED') {
-            throw new AppError(400, 'Cannot revoke an already redeemed invitation', 'ALREADY_REDEEMED');
+        if (invitation.status !== 'ISSUED') {
+            if (invitation.status === 'REDEEMED') {
+                throw new AppError(400, 'Cannot revoke an already redeemed invitation', 'ALREADY_REDEEMED');
+            }
+            if (invitation.status === 'REVOKED') {
+                throw new AppError(400, 'This invitation has already been revoked', 'ALREADY_REVOKED');
+            }
+            throw new AppError(400, 'This invitation cannot be revoked in its current status', 'INVALID_INVITATION_STATUS');
         }
 
         const updated = await prisma.teacherInvitation.update({
@@ -551,7 +557,7 @@ export class AuthService {
 
         const passwordHash = await hashPassword(newPassword);
 
-        // Transactionally update password and revoke reset token
+        // Transactionally update password and revoke all active refresh tokens
         await prisma.$transaction(async (tx) => {
             await tx.user.update({
                 where: { id: resetRecord.userId },
@@ -561,10 +567,14 @@ export class AuthService {
                 },
             });
 
-            // Mark reset token as used (revoked)
-            await tx.refreshToken.update({
-                where: { id: resetRecord.id },
-                data: { revokedAt: new Date() },
+            // Revoke all of the user's active refresh tokens (including the reset token itself)
+            const now = new Date();
+            await tx.refreshToken.updateMany({
+                where: {
+                    userId: resetRecord.userId,
+                    revokedAt: null,
+                },
+                data: { revokedAt: now },
             });
         });
 
@@ -588,12 +598,24 @@ export class AuthService {
 
         const passwordHash = await hashPassword(newPassword);
 
-        await prisma.user.update({
-            where: { id: userId },
-            data: {
-                passwordHash,
-                passwordChangedAt: new Date(),
-            },
+        // Transactionally update password and revoke all active refresh tokens
+        await prisma.$transaction(async (tx) => {
+            await tx.user.update({
+                where: { id: userId },
+                data: {
+                    passwordHash,
+                    passwordChangedAt: new Date(),
+                },
+            });
+
+            const now = new Date();
+            await tx.refreshToken.updateMany({
+                where: {
+                    userId: userId,
+                    revokedAt: null,
+                },
+                data: { revokedAt: now },
+            });
         });
 
         return { message: 'Password has been updated successfully.' };

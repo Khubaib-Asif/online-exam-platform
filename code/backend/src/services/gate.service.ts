@@ -157,14 +157,16 @@ export class GateService {
     // Enforce Late Entry Grace Period for new sessions
     const isReconnecting = existingSession && (existingSession.status === 'ACTIVE' || existingSession.status === 'PAUSED_RECONNECT');
     const graceMinutes = exam.lateEntryGraceMinutes ?? 15;
-    const lateCutoffMs = exam.startsAt.getTime() + graceMinutes * 60 * 1000;
 
-    if (!isReconnecting && now.getTime() > lateCutoffMs) {
-      throw new AppError(
-        400,
-        `Late entry is closed. The allowed entry window of ${graceMinutes} minutes after exam start has elapsed.`,
-        'LATE_ENTRY_DENIED'
-      );
+    if (!isReconnecting && exam.startsAt) {
+      const lateCutoffMs = exam.startsAt.getTime() + graceMinutes * 60 * 1000;
+      if (now.getTime() > lateCutoffMs) {
+        throw new AppError(
+          400,
+          `Late entry is closed. The allowed entry window of ${graceMinutes} minutes after exam start has elapsed.`,
+          'LATE_ENTRY_DENIED'
+        );
+      }
     }
 
     // Retrieve candidate's active registered device if available

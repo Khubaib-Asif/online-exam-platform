@@ -121,7 +121,41 @@ export const TeacherActivationScreen: React.FC = () => {
         );
     }
 
-    // 3. Invalid or Expired or Revoked Token State
+    // 3. Validation API Error State
+    if (validationApiError) {
+        const errorMessage =
+            (validationApiError as any)?.data?.message ||
+            (validationApiError as any)?.message ||
+            "Unable to verify this invitation link. It may have expired or been revoked.";
+
+        return (
+            <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-4">
+                <CredentialPanel
+                    title="Validation Failed"
+                    subtitle="We could not verify your teacher invitation."
+                >
+                    <div className="flex flex-col gap-4 text-left">
+                        <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-md flex items-start gap-2.5">
+                            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                            <div>
+                                {errorMessage}
+                            </div>
+                        </div>
+
+                        <div className="mt-2 text-center">
+                            <Link to="/login">
+                                <Button variant="secondary" size="sm" className="w-full">
+                                    Return to Sign In
+                                </Button>
+                            </Link>
+                        </div>
+                    </div>
+                </CredentialPanel>
+            </div>
+        );
+    }
+
+    // 4. Invalid or Expired or Revoked Token State
     if (validation && !validation.isValid) {
         const isAlreadyActive = validation.status === 'ALREADY_REGISTERED' || validation.status === 'REDEEMED';
 
@@ -246,7 +280,7 @@ export const TeacherActivationScreen: React.FC = () => {
                     <Button
                         type="submit"
                         size="md"
-                        loading={isRedeeming}
+                        isLoading={isRedeeming}
                         className="w-full mt-2"
                         icon={<CheckCircle2 className="w-4 h-4" />}
                     >

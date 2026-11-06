@@ -38,7 +38,12 @@ export class SessionService {
   private static buildSynchronousTimeline(exam: any, revision: any) {
     const startsAt = exam?.startsAt ? new Date(exam.startsAt) : new Date();
     const paperDurationSeconds = revision.paperDurationSeconds || 7200;
-    const paperDeadline = exam?.closesAt ? new Date(exam.closesAt) : new Date(startsAt.getTime() + paperDurationSeconds * 1000);
+    const durationBasedDeadline = new Date(startsAt.getTime() + paperDurationSeconds * 1000);
+    const closesAtDeadline = exam?.closesAt ? new Date(exam.closesAt) : null;
+    // Use the earlier of exam.closesAt and startsAt + paperDurationSeconds
+    const paperDeadline = closesAtDeadline
+      ? new Date(Math.min(closesAtDeadline.getTime(), durationBasedDeadline.getTime()))
+      : durationBasedDeadline;
 
     const sortedSections = [...(revision.sections || [])].sort((a: any, b: any) => a.orderIndex - b.orderIndex);
 
@@ -78,6 +83,8 @@ export class SessionService {
     let qIndex = 0;
     sortedSections.forEach((sec: any, secIdx: number) => {
       const secSched = sectionSchedules[secIdx];
+      // Reset question timeline cursor to section boundary so questions align with their section
+      currentQStartMs = secSched.startAt.getTime();
       const sortedQ = [...(sec.questions || [])].sort((a: any, b: any) => a.orderIndex - b.orderIndex);
 
       sortedQ.forEach((eq: any) => {
@@ -260,14 +267,20 @@ export class SessionService {
         }
 
         if (!foundActive && attemptInitialStates.length > 0) {
-          const firstPending = attemptInitialStates.findIndex((a) => a.outcome === 'NOT_STARTED');
-          if (firstPending !== -1) {
-            targetQuestionIndex = firstPending;
-            targetSectionIndex = orderedQuestions[firstPending].sectionIndex;
-            activeQuestionDeadline = orderedQuestions[firstPending].questionEndAt;
-            activeSectionDeadline = orderedQuestions[firstPending].sectionEndAt;
-            attemptInitialStates[firstPending].outcome = 'ACTIVE';
-            attemptInitialStates[firstPending].activeAt = now;
+          // Only activate a NOT_STARTED question whose scheduled window has already opened
+          const firstEligible = attemptInitialStates.findIndex(
+            (a) => a.outcome === 'NOT_STARTED' && now >= orderedQuestions[a.orderIndexAtStart].questionStartAt
+          );
+          if (firstEligible !== -1) {
+            targetQuestionIndex = firstEligible;
+            targetSectionIndex = orderedQuestions[firstEligible].sectionIndex;
+            activeQuestionDeadline = orderedQuestions[firstEligible].questionEndAt;
+            activeSectionDeadline = orderedQuestions[firstEligible].sectionEndAt;
+            attemptInitialStates[firstEligible].outcome = 'ACTIVE';
+            attemptInitialStates[firstEligible].activeAt = now;
+          } else {
+            // No eligible question — auto-submit rather than leaving session ACTIVE with no question
+            return this.autoSubmitExpiredExam(session, orderedQuestions, 'NO_ELIGIBLE_QUESTION');
           }
         }
       } else if (timingMode === 'SECTION_TIMED') {
@@ -312,13 +325,19 @@ export class SessionService {
         }
 
         if (!foundActive && attemptInitialStates.length > 0) {
-          const firstPending = attemptInitialStates.findIndex((a) => a.outcome === 'NOT_STARTED');
-          if (firstPending !== -1) {
-            targetQuestionIndex = firstPending;
-            targetSectionIndex = orderedQuestions[firstPending].sectionIndex;
-            activeSectionDeadline = orderedQuestions[firstPending].sectionEndAt;
-            attemptInitialStates[firstPending].outcome = 'ACTIVE';
-            attemptInitialStates[firstPending].activeAt = now;
+          // Only activate a NOT_STARTED question whose section window has already opened
+          const firstEligible = attemptInitialStates.findIndex(
+            (a) => a.outcome === 'NOT_STARTED' && now >= orderedQuestions[a.orderIndexAtStart].sectionStartAt
+          );
+          if (firstEligible !== -1) {
+            targetQuestionIndex = firstEligible;
+            targetSectionIndex = orderedQuestions[firstEligible].sectionIndex;
+            activeSectionDeadline = orderedQuestions[firstEligible].sectionEndAt;
+            attemptInitialStates[firstEligible].outcome = 'ACTIVE';
+            attemptInitialStates[firstEligible].activeAt = now;
+          } else {
+            // No eligible question — auto-submit rather than leaving session ACTIVE with no question
+            return this.autoSubmitExpiredExam(session, orderedQuestions, 'NO_ELIGIBLE_QUESTION');
           }
         }
       } else {

@@ -21,7 +21,7 @@ export const computeFullName = (u: any): string => {
     }
     const combined = `${u.firstName || ''} ${u.lastName || ''}`.trim();
     if (combined.length > 0) return combined;
-    return u.email ? u.email.split('@')[0] : "User";
+    return u.email ? u.email : "User";
 };
 
 interface AuthState {
@@ -45,10 +45,12 @@ const getInitialAuthState = (): AuthState => {
             const userJson = localStorage.getItem('user') || sessionStorage.getItem('user');
             if (userJson) {
                 const parsed = JSON.parse(userJson);
-                storedUser = {
-                    ...parsed,
-                    fullName: computeFullName(parsed),
-                };
+                if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                    storedUser = {
+                        ...parsed,
+                        fullName: computeFullName(parsed),
+                    };
+                }
             }
         } catch (e) {
             console.warn('Failed to parse stored auth:', e);
@@ -76,11 +78,17 @@ const authSlice = createSlice({
         setAuth: (
             state,
             action: PayloadAction<{
-                user: any;
+                user: Omit<UserProfile, 'fullName'> & { fullName?: string };
                 accessToken: string;
             }>
         ) => {
             const rawUser = action.payload.user;
+            if (!rawUser) {
+                state.user = null;
+                state.accessToken = action.payload.accessToken;
+                state.isAuthenticated = false;
+                return;
+            }
             const fullUser: UserProfile = {
                 ...rawUser,
                 fullName: computeFullName(rawUser),

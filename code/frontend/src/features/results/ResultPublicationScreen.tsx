@@ -129,7 +129,7 @@ export const ResultPublicationScreen: React.FC = () => {
                 <div>
                   <span className="font-semibold">Publication Authority:</span>
                   <p className="mt-0.5 text-amber-800">
-                    Publishing makes grades and permitted feedback visible to registered students. This action generates result hashes and appends into audit events.
+                    Publishing makes grades and permitted feedback visible to registered students. This action generates result hashes and appends audit events.
                   </p>
                 </div>
               </div>

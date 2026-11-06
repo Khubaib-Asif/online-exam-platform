@@ -49,8 +49,11 @@ export const LoginScreen: React.FC = () => {
                 }));
                 localStorage.setItem("accessToken", response.accessToken);
                 localStorage.setItem("user", JSON.stringify(response.user));
-                const destination = (location.state as any)?.from || "/dashboard";
-                navigate(destination);
+                const rawFrom = (location.state as any)?.from;
+                const destination = typeof rawFrom === "string" && rawFrom.startsWith("/") && !rawFrom.startsWith("//")
+                    ? rawFrom
+                    : "/dashboard";
+                navigate(destination, { replace: true });
             })
             .catch((err) => {
                 console.error("Login error:", err);

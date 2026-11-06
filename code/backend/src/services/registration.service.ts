@@ -252,26 +252,51 @@ export class RegistrationService {
     const tokenHash = sha256(cleanToken);
     const tokenUpperHash = sha256(tokenUpper);
 
-    const invitation = await prisma.examInvitation.findFirst({
-      where: {
-        OR: [
-          { code: cleanToken },
-          { code: tokenUpper },
-          { tokenHash: tokenHash },
-          { tokenHash: tokenUpperHash },
-        ],
-      },
-      include: {
-        exam: {
-          include: {
-            revisions: {
-              where: { status: 'PUBLISHED' },
-              take: 1,
-            },
+    const invitationWhere = {
+      OR: [
+        { code: cleanToken },
+        { code: tokenUpper },
+        { tokenHash: tokenHash },
+        { tokenHash: tokenUpperHash },
+      ],
+    };
+
+    const invitationInclude = {
+      exam: {
+        include: {
+          revisions: {
+            where: { status: 'PUBLISHED' },
+            take: 1,
           },
         },
       },
-    });
+    };
+
+    // Deterministic ordering: prefer active (non-revoked, non-expired) invitations first
+    const orderBy = [
+      { revokedAt: 'asc' as const },   // nulls (not revoked) sort first in asc
+      { expiresAt: 'desc' as const },  // furthest expiry first
+      { createdAt: 'desc' as const },  // newest first as tiebreaker
+    ];
+
+    // Prefer an active invitation scoped to the expected exam
+    let invitation = null;
+    if (expectedExamId) {
+      invitation = await prisma.examInvitation.findFirst({
+        where: { ...invitationWhere, examId: expectedExamId },
+        include: invitationInclude,
+        orderBy,
+      });
+    }
+
+    // Fall back to cross-exam lookup only if scoped search found nothing
+    if (!invitation) {
+      invitation = await prisma.examInvitation.findFirst({
+        where: invitationWhere,
+        include: invitationInclude,
+        orderBy,
+      });
+    }
 
     if (!invitation) {
       throw new AppError(404, 'Invalid invitation code. Please verify the code and try again.', 'INVALID_INVITATION');
@@ -338,15 +363,7 @@ export class RegistrationService {
       );
     }
 
-    // Capacity Check
-    if (exam.capacity) {
-      const currentApprovedCount = await prisma.examRegistration.count({
-        where: { examId: invitation.examId, status: 'APPROVED' },
-      });
-      if (currentApprovedCount >= exam.capacity) {
-        throw new AppError(400, 'Exam registration capacity limit has been reached.', 'CAPACITY_REACHED');
-      }
-    }
+    // Capacity is now checked atomically inside the transaction below
 
     const publishedRevision = exam.revisions[0];
     if (!publishedRevision) {
@@ -422,13 +439,30 @@ export class RegistrationService {
         });
       }
 
-      // Increment invitation used count
-      await tx.examInvitation.update({
-        where: { id: invitation.id },
+      // Atomically claim an invitation slot only if below maxUses
+      const claimedInvitation = await tx.examInvitation.updateMany({
+        where: {
+          id: invitation.id,
+          usedCount: { lt: invitation.maxUses },
+        },
         data: {
           usedCount: { increment: 1 },
         },
       });
+
+      if (claimedInvitation.count === 0) {
+        throw new AppError(400, 'This invitation code has reached its maximum allowed redemptions.', 'INVITATION_MAX_USES_REACHED');
+      }
+
+      // Atomically claim a capacity slot if the exam has a capacity limit
+      if (exam.capacity) {
+        const currentApproved = await tx.examRegistration.count({
+          where: { examId: invitation.examId, status: 'APPROVED' },
+        });
+        if (currentApproved >= exam.capacity) {
+          throw new AppError(400, 'Exam registration capacity limit has been reached.', 'CAPACITY_REACHED');
+        }
+      }
 
       return {
         ...registration,
@@ -465,6 +499,7 @@ export class RegistrationService {
       sessionStatus: reg.exam.sessions[0]?.status || null,
       startsAt: reg.exam.startsAt,
       closesAt: reg.exam.closesAt,
+      lateEntryGraceMinutes: reg.exam.lateEntryGraceMinutes ?? 15,
       registrationOpensAt: reg.exam.registrationOpensAt,
       registrationClosesAt: reg.exam.registrationClosesAt,
       requestedAt: reg.requestedAt,
@@ -689,15 +724,30 @@ export class RegistrationService {
 
     const recipientEmail = data.recipientEmail ? data.recipientEmail.trim().toLowerCase() : null;
 
+    // Hoisted so it is accessible in the $transaction block for atomic revocation + duplicate check
+    let existingClassCode: any = null;
+
     // 1. If sending a direct email invite, check if an active invite already exists for this student
     if (recipientEmail) {
-      const existingEmailInvite = await prisma.examInvitation.findFirst({
+      const now = new Date();
+      const existingEmailInviteCandidates = await prisma.examInvitation.findMany({
         where: {
           examId: data.examId,
           recipientEmail,
           revokedAt: null,
+          expiresAt: { gt: now },
         },
       });
+      // Only reuse invitations that still have uses remaining
+      const existingEmailInvite = existingEmailInviteCandidates.find((inv) => inv.usedCount < inv.maxUses) || null;
+
+      if (existingEmailInvite && data.regenerate) {
+        // Revoke the prior usable email invitation before creating its replacement
+        await prisma.examInvitation.update({
+          where: { id: existingEmailInvite.id },
+          data: { revokedAt: new Date() },
+        });
+      }
 
       if (existingEmailInvite && !data.regenerate) {
         EmailService.sendExamInvitation(recipientEmail, existingEmailInvite.code || 'INV-CODE').catch(console.error);
@@ -718,11 +768,13 @@ export class RegistrationService {
 
     // 2. If creating a Universal Class Code (recipientEmail is null), enforce Single Active Class Code per Exam
     if (!recipientEmail) {
-      const existingClassCode = await prisma.examInvitation.findFirst({
+      const classCodeNow = new Date();
+      existingClassCode = await prisma.examInvitation.findFirst({
         where: {
           examId: data.examId,
           recipientEmail: null,
           revokedAt: null,
+          expiresAt: { gt: classCodeNow },
         },
       });
 
@@ -756,19 +808,25 @@ export class RegistrationService {
           };
         }
 
-        // If regenerating or assigning a new custom code, automatically revoke previous active class code
-        await prisma.examInvitation.update({
-          where: { id: existingClassCode.id },
-          data: { revokedAt: new Date() },
-        });
+        // Revocation is now handled atomically inside the $transaction block below
       }
     }
 
-    // Generate new code
+    // Generate new code — normalize once, preserving existing INV- prefix
     let rawToken: string;
     if (data.customCode && data.customCode.trim().length > 0) {
-      const sanitized = data.customCode.trim().replace(/[^a-zA-Z0-9_-]/g, '').toUpperCase();
-      rawToken = sanitized.startsWith('INV-') ? sanitized : `INV-${sanitized}`;
+      const trimmed = data.customCode.trim();
+      const hasPrefix = trimmed.toUpperCase().startsWith('INV-');
+      const stripped = hasPrefix ? trimmed.slice(4) : trimmed;
+      const sanitized = stripped.replace(/[^a-zA-Z0-9_-]/g, '').toUpperCase();
+      if (sanitized.length < 3) {
+        throw new AppError(
+          400,
+          'Custom code must contain at least three alphanumeric characters after sanitization.',
+          'INVALID_CUSTOM_CODE'
+        );
+      }
+      rawToken = `INV-${sanitized}`;
     } else {
       rawToken = `INV-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
     }
@@ -778,30 +836,46 @@ export class RegistrationService {
     const expiresAt = new Date(Date.now() + expiresIn * 1000);
     const maxUses = recipientEmail ? 1 : (data.maxUses || 30);
 
-    // Check if duplicate tokenHash exists across any active invite
-    const existing = await prisma.examInvitation.findFirst({
-      where: {
+    // Perform revocation of prior class code (if applicable), duplicate check, and creation in one transaction
+    const invitation = await prisma.$transaction(async (tx) => {
+      // Revoke prior active class code within the transaction so it no longer blocks the duplicate check
+      if (!recipientEmail && existingClassCode) {
+        await tx.examInvitation.update({
+          where: { id: existingClassCode.id },
+          data: { revokedAt: new Date() },
+        });
+      }
+
+      // Check for duplicate tokenHash/code among active invites, excluding the current code being replaced
+      const duplicateWhere: any = {
         OR: [
           { tokenHash },
           { code: rawToken },
         ],
         revokedAt: null,
-      },
-    });
+      };
+      if (existingClassCode) {
+        duplicateWhere.id = { not: existingClassCode.id };
+      }
 
-    if (existing) {
-      throw new AppError(409, 'An active invitation with this code already exists. Please choose another code.', 'DUPLICATE_INVITATION_CODE');
-    }
+      const existingDuplicate = await tx.examInvitation.findFirst({
+        where: duplicateWhere,
+      });
 
-    const invitation = await prisma.examInvitation.create({
-      data: {
-        examId: data.examId,
-        tokenHash,
-        code: rawToken,
-        recipientEmail,
-        maxUses,
-        expiresAt,
-      },
+      if (existingDuplicate) {
+        throw new AppError(409, 'An active invitation with this code already exists. Please choose another code.', 'DUPLICATE_INVITATION_CODE');
+      }
+
+      return tx.examInvitation.create({
+        data: {
+          examId: data.examId,
+          tokenHash,
+          code: rawToken,
+          recipientEmail,
+          maxUses,
+          expiresAt,
+        },
+      });
     });
 
     if (recipientEmail) {
